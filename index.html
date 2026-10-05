@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AegisField: Offline Emergency Notes Triage</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>tailwind.config = { darkMode: 'class' };</script>
+</head>
+
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+    <!-- Header -->
+    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-10">
+        <div class="max-w-7xl mx-auto px-4 py-4 flex flex-wrap items-center justify-between gap-3">
+            <h1 class="text-xl sm:text-2xl font-bold tracking-tight">
+                🛡️ AegisField: <span class="text-slate-400 font-medium">Offline Emergency Notes Triage</span>
+            </h1>
+            <div class="flex items-center gap-2 text-xs sm:text-sm">
+                <span id="storageBadge"
+                    class="px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300">Storage: …</span>
+                <span id="ollamaBadge"
+                    class="px-3 py-1 rounded-full border bg-slate-800 border-slate-700 text-slate-300 flex items-center gap-2">
+                    <span id="ollamaDot" class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+                    <span id="ollamaText">Ollama: checking…</span>
+                </span>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-5 gap-6">
+        <!-- Left: Input form -->
+        <section class="lg:col-span-2">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 lg:sticky lg:top-24">
+                <h2 class="text-lg font-semibold mb-1">New Field Note</h2>
+                <p class="text-sm text-slate-400 mb-4">Type or paste raw notes. The local model structures them
+                    on-device.</p>
+
+                <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1" for="operatorId">Operator
+                    ID</label>
+                <input id="operatorId" type="text" value="operator-01"
+                    class="w-full mb-4 rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+
+                <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1" for="rawText">Raw field
+                    input</label>
+                <textarea id="rawText" rows="7" maxlength="5000"
+                    placeholder="e.g. Road on Sector 4 blocked by debris, team short on clean water, 2 injured"
+                    class="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"></textarea>
+
+                <div class="flex flex-wrap gap-2 mt-3">
+                    <button type="button" data-sample="bridge"
+                        class="sample-btn text-xs px-3 py-1.5 rounded-full bg-slate-800 hover:bg-slate-700 border border-slate-700">🌉
+                        Bridge Collapse</button>
+                    <button type="button" data-sample="medical"
+                        class="sample-btn text-xs px-3 py-1.5 rounded-full bg-slate-800 hover:bg-slate-700 border border-slate-700">💊
+                        Medical Shortage</button>
+                    <button type="button" data-sample="routine"
+                        class="sample-btn text-xs px-3 py-1.5 rounded-full bg-slate-800 hover:bg-slate-700 border border-slate-700">✅
+                        Routine Check-in</button>
+                </div>
+
+                <button id="submitBtn" type="button"
+                    class="mt-5 w-full flex items-center justify-center gap-2 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-60 disabled:cursor-not-allowed px-4 py-2.5 font-semibold transition">
+                    <svg id="spinner" class="hidden animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg"
+                        fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4">
+                        </circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                    </svg>
+                    <span id="submitLabel">Triage Note</span>
+                </button>
+                <p id="formError" class="hidden mt-3 text-sm text-red-400"></p>
+                <p class="mt-3 text-xs text-slate-500">The first request can take a while while the model loads into
+                    memory.</p>
+            </div>
+        </section>
+
+        <!-- Right: Live feed -->
+        <section class="lg:col-span-3">
+            <div class="flex items-center justify-between gap-3 mb-4">
+                <h2 class="text-lg font-semibold">Live Triage Feed</h2>
+                <span id="countLabel" class="text-xs text-slate-400"></span>
+            </div>
+            <input id="searchBar" type="search" placeholder="Search notes (e.g. water, Sector 4, critical)…"
+                class="w-full mb-4 rounded-lg bg-slate-900 border border-slate-700 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+            <div id="feed" class="space-y-4"></div>
+        </section>
+    </main>
+
+    <script>
+        const SAMPLES = {
+            bridge: "URGENT: North River Bridge near Sector 7 has collapsed. Two vehicles in the water, at least 3 people trapped, one unconscious. Need rescue boats and paramedics immediately. Access road is blocked by debris.",
+            medical: "Camp Alpha clinic running out of insulin and antibiotics. 12 diabetic patients affected, 4 with infected wounds and fever. Need resupply within 24 hours. Generator fuel also low.",
+            routine: "End of shift check-in from Zone B. Distribution of blankets completed, 85 families served. No incidents. Team rested, vehicles fueled. Resuming patrol at 0600."
+        };
+
+        const PRIORITY_STYLES = {
+            CRITICAL: "bg-red-600/20 text-red-300 border-red-500/50",
+            HIGH: "bg-orange-500/20 text-orange-300 border-orange-500/50",
+            MEDIUM: "bg-yellow-500/20 text-yellow-200 border-yellow-500/50",
+            LOW: "bg-green-600/20 text-green-300 border-green-500/50"
+        };
+        const PRIORITY_BAR = { CRITICAL: "border-l-red-500", HIGH: "border-l-orange-500", MEDIUM: "border-l-yellow-400", LOW: "border-l-green-500" };
+
+        let allNotes = [];
+
+        const $ = (id) => document.getElementById(id);
+
+        function esc(value) {
+            const div = document.createElement("div");
+            div.textContent = value == null ? "" : String(value);
+            return div.innerHTML;
+        }
+
+        function timeAgo(iso) {
+            const d = new Date(iso);
+            if (isNaN(d)) return "";
+            return d.toLocaleString();
+        }
+
+        function noteSearchText(n) {
+            const t = n.triage || {};
+            return [t.summary, t.location, t.category, t.priority, (t.actionable_needs || []).join(" "), n.raw_text, n.operator_id]
+                .join(" ").toLowerCase();
+        }
+
+        function renderFeed() {
+            const q = $("searchBar").value.trim().toLowerCase();
+            const terms = q.split(/\s+/).filter(Boolean);
+            const notes = terms.length
+                ? allNotes.filter((n) => { const hay = noteSearchText(n); return terms.every((t) => hay.includes(t)); })
+                : allNotes;
+
+            $("countLabel").textContent = `${notes.length} of ${allNotes.length} report${allNotes.length === 1 ? "" : "s"}`;
+
+            if (!notes.length) {
+                $("feed").innerHTML = `<div class="text-center text-slate-500 border border-dashed border-slate-800 rounded-2xl py-14">
+          ${allNotes.length ? "No notes match your search." : "No field notes yet. Submit one to get started."}</div>`;
+                return;
+            }
+
+            $("feed").innerHTML = notes.map((n) => {
+                const t = n.triage || {};
+                const pr = PRIORITY_STYLES[t.priority] ? t.priority : "LOW";
+                const needs = (t.actionable_needs || []).length
+                    ? `<ul class="mt-3 space-y-1 text-sm text-slate-300 list-disc list-inside">${t.actionable_needs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`
+                    : `<p class="mt-3 text-sm text-slate-500 italic">No actionable needs identified.</p>`;
+                const src = (n.triage_source || "").startsWith("heuristic")
+                    ? `<span class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-amber-300 border border-amber-500/30" title="Ollama was unavailable; keyword rules were used">rule-based</span>`
+                    : `<span class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-sky-300 border border-sky-500/30">AI</span>`;
+                return `
+        <article class="bg-slate-900 border border-slate-800 border-l-4 ${PRIORITY_BAR[pr]} rounded-xl p-4">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-bold px-2.5 py-1 rounded-full border ${PRIORITY_STYLES[pr]}">${esc(pr)}</span>
+            <span class="text-xs px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300">${esc(t.category)}</span>
+            <span class="text-xs px-2.5 py-1 rounded-full bg-sky-900/40 border border-sky-700/50 text-sky-300">📍 ${esc(t.location || "Unknown")}</span>
+            ${src}
+            <span class="ml-auto text-xs text-slate-500">${esc(timeAgo(n.timestamp))}</span>
+          </div>
+          <p class="mt-3 text-slate-100">${esc(t.summary)}</p>
+          ${needs}
+          <details class="mt-3 group">
+            <summary class="cursor-pointer text-xs text-slate-400 hover:text-slate-200 select-none">Raw field note · ${esc(n.operator_id)}</summary>
+            <pre class="mt-2 whitespace-pre-wrap text-xs text-slate-400 bg-slate-950 border border-slate-800 rounded-lg p-3">${esc(n.raw_text)}</pre>
+          </details>
+        </article>`;
+            }).join("");
+        }
+
+        async function loadNotes() {
+            try {
+                const res = await fetch("/api/notes");
+                if (!res.ok) throw new Error("Failed to load notes");
+                allNotes = await res.json();
+                renderFeed();
+            } catch (err) {
+                $("feed").innerHTML = `<div class="text-red-400 text-sm">Could not load notes: ${esc(err.message)}</div>`;
+            }
+        }
+
+        async function refreshStatus() {
+            const dot = $("ollamaDot"), text = $("ollamaText"), badge = $("ollamaBadge");
+            try {
+                const res = await fetch("/api/status");
+                const s = await res.json();
+                $("storageBadge").textContent = s.storage === "mongodb" ? "Storage: MongoDB Atlas" : "Storage: In-memory";
+                if (s.ollama && s.model_ready) {
+                    dot.className = "w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse";
+                    text.textContent = `Ollama: online (${s.model})`;
+                    badge.className = "px-3 py-1 rounded-full border bg-green-900/30 border-green-600/50 text-green-300 flex items-center gap-2";
+                } else if (s.ollama) {
+                    dot.className = "w-2.5 h-2.5 rounded-full bg-orange-500";
+                    text.textContent = `Ollama: model "${s.model}" not pulled`;
+                    badge.className = "px-3 py-1 rounded-full border bg-orange-900/30 border-orange-600/50 text-orange-300 flex items-center gap-2";
+                } else {
+                    throw new Error("offline");
+                }
+            } catch (_) {
+                dot.className = "w-2.5 h-2.5 rounded-full bg-red-500";
+                text.textContent = "Ollama: offline (rule-based fallback)";
+                badge.className = "px-3 py-1 rounded-full border bg-red-900/30 border-red-600/50 text-red-300 flex items-center gap-2";
+            }
+        }
+
+        async function submitNote() {
+            const raw = $("rawText").value.trim();
+            const err = $("formError");
+            err.classList.add("hidden");
+            if (!raw) {
+                err.textContent = "Please enter a field note first.";
+                err.classList.remove("hidden");
+                return;
+            }
+            const btn = $("submitBtn");
+            btn.disabled = true;
+            $("spinner").classList.remove("hidden");
+            $("submitLabel").textContent = "Triaging…";
+            try {
+                const res = await fetch("/api/notes", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ raw_text: raw, operator_id: $("operatorId").value.trim() || "unknown" })
+                });
+                if (!res.ok) {
+                    const body = await res.json().catch(() => ({}));
+                    throw new Error(typeof body.detail === "string" ? body.detail : "Server rejected the note");
+                }
+                const note = await res.json();
+                allNotes.unshift(note);
+                $("rawText").value = "";
+                renderFeed();
+                refreshStatus();
+            } catch (e) {
+                err.textContent = e.message || "Something went wrong.";
+                err.classList.remove("hidden");
+            } finally {
+                btn.disabled = false;
+                $("spinner").classList.add("hidden");
+                $("submitLabel").textContent = "Triage Note";
+            }
+        }
+
+        document.querySelectorAll(".sample-btn").forEach((b) =>
+            b.addEventListener("click", () => { $("rawText").value = SAMPLES[b.dataset.sample]; $("rawText").focus(); })
+        );
+        $("submitBtn").addEventListener("click", submitNote);
+        $("rawText").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") submitNote(); });
+        $("searchBar").addEventListener("input", renderFeed);
+
+        refreshStatus();
+        loadNotes();
+        setInterval(refreshStatus, 10000);
+    </script>
+</body>
+
+</html>

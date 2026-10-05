@@ -1,0 +1,54 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual Environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment Variables & Secrets (CRITICAL)
+.env
+.env.*
+!.env.example
+secrets.json
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local Database & Storage Fallbacks
+*.db
+*.sqlite3
+*.log
+local_storage/
+data/
+
+# Model Files & Weights (Keep heavy local AI models out of Git)
+*.bin
+*.onnx
+*.safetensors
+*.gguf
+models/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Python packaging / build directories
+build/
+dist/
+*.egg-info/
