@@ -1,4 +1,4 @@
-# 🛡️ AegisField: Offline Emergency Notes Triage
+# 🛡️ ResillO: Offline Emergency Notes Triage
 
 An offline-first tool for field operators in connectivity-dead zones. It turns messy field notes into structured triage data (priority, category, location, summary, needs) using a **local** open-weight model (Gemma 2B via Ollama), so nothing leaves the device. Reports are stored in MongoDB Atlas, or in memory when the database is unreachable.
 
@@ -26,7 +26,7 @@ export MONGO_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?retryWr
 # Windows PowerShell: $env:MONGO_URI="..."
 ```
 Data goes to database `field_notes`, collection `triaged_reports`.
-If `MONGO_URI` is missing or unreachable, AegisField falls back to **in-memory storage** (data is lost on restart). The header badge shows which mode is active.
+If `MONGO_URI` is missing or unreachable, ResillO falls back to **in-memory storage** (data is lost on restart). The header badge shows which mode is active.
 
 ### 4. Run
 ```bash
