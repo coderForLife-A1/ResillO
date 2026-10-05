@@ -49,13 +49,13 @@ def fallback_parse(text: str):
         category = "Supplies"
     elif any(word in text_lower for word in ["bridge", "road", "power", "infrastructure", "grid"]):
         category = "Infrastructure"
-        
     return {
         "priority": priority,
         "category": category,
         "location": "Unknown",
         "summary": text[:100] + "..." if len(text) > 100 else text,
-        "actionable_needs": ["Review manually"]
+        "actionable_needs": ["Review manually", "Verify local Ollama node connection"],
+        "status": "fallback_mode"
     }
 
 @app.get("/", response_class=HTMLResponse)
@@ -99,7 +99,7 @@ Raw text: {req.raw_text}
                     "stream": False,
                     "format": "json"
                 },
-                timeout=10.0
+                timeout=3.0
             )
             response.raise_for_status()
             res_json = response.json()
