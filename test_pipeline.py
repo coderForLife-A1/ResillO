@@ -22,7 +22,7 @@ def test_pipeline():
 
     print("\n--- Sending Mock Payload ---")
     payload = {
-        "raw_text": "Emergency! The central power grid is down in the downtown sector after the storm. We need portable generators and electricians immediately.",
+        "raw_text": "CRITICAL: The central power grid has collapsed in the downtown hospital zone. Backup generators failing rapidly, patients in ICU at severe risk.",
         "operator_id": "TEST-OP-1"
     }
     
@@ -33,16 +33,28 @@ def test_pipeline():
         note = res.json()
         t1 = time.time()
         
-        print(f"\n✅ Success in {t1-t0:.2f}s!")
+        note_id = note.get("id") or note.get("_id")
+        print(f"\n✅ Note Created in {t1-t0:.2f}s! [ID: {note_id}]")
         print("Triaged Result:")
         print(f"  Priority: {note.get('priority')}")
+        print(f"  Threat Status: {note.get('threat_status')}")
         print(f"  Category: {note.get('category')}")
         print(f"  Summary: {note.get('summary')}")
         print(f"  Actionable Needs: {note.get('actionable_needs')}")
-        print(f"  Location: {note.get('location')}")
+        print(f"  Last Checked: {note.get('last_checked')}")
+        
+        # Test 5s cadence refresh endpoint
+        print("\n--- Testing Note Refresh Endpoint ---")
+        time.sleep(1)
+        ref_res = httpx.post(f"{API_BASE}/api/notes/{note_id}/refresh", timeout=5.0)
+        ref_res.raise_for_status()
+        refreshed_note = ref_res.json()
+        print(f"✅ Refresh verified!")
+        print(f"  Updated Last Checked: {refreshed_note.get('last_checked')}")
+        print(f"  Updated Threat Status: {refreshed_note.get('threat_status')}")
         
     except Exception as e:
-        print(f"\n❌ Failed to create note: {e}")
+        print(f"\n❌ Failed during test: {e}")
         
 if __name__ == "__main__":
     test_pipeline()

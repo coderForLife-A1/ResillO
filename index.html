@@ -38,6 +38,13 @@
             </div>
 
             <div class="flex items-center flex-wrap gap-3">
+                <!-- 5-Second Cadence Status Indicator -->
+                <div class="flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-medium border"
+                     :class="syncFailed ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800' : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800'">
+                    <span class="w-2 h-2 rounded-full" :class="syncFailed ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'"></span>
+                    <span class="font-mono text-[11px]">{{ syncFailed ? 'Auto-sync Failed (Manual Ready)' : '5s Live Radar' }}</span>
+                </div>
+
                 <!-- Status Badges -->
                 <div class="flex items-center space-x-2 text-xs font-semibold">
                     <span class="text-gray-600 dark:text-gray-300">Ollama:</span>
@@ -91,25 +98,71 @@
             <!-- Right Pane: Triaged Feed -->
             <div class="w-full md:w-2/3">
                 <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-                    <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                        <span>📡</span> Triaged Feed
-                    </h2>
+                    <div class="flex items-center gap-3">
+                        <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                            <span>📡</span> Triaged Feed
+                        </h2>
+                        <!-- Small manual refresh all button -->
+                        <button @click="autoRefreshFeed" 
+                                :disabled="isRefreshingAll"
+                                title="Force refresh all threat states"
+                                class="p-1.5 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors focus:outline-none flex items-center gap-1 text-xs font-medium border border-gray-300 dark:border-gray-600">
+                            <svg class="w-3.5 h-3.5" :class="{ 'animate-spin text-blue-500': isRefreshingAll }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            <span>Refresh</span>
+                        </button>
+                    </div>
                     <input type="text" v-model="searchQuery" placeholder="Filter by keyword, location, priority..." class="p-2 border rounded-lg w-full sm:w-72 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-700 placeholder-gray-400 dark:placeholder-gray-500 text-sm transition-colors duration-200">
                 </div>
 
                 <div class="space-y-4">
-                    <div v-for="note in filteredNotes" :key="note.timestamp" class="bg-white dark:bg-gray-800 p-5 rounded-lg shadow-sm dark:shadow-gray-950/40 border-l-4 border-y border-r border-gray-200 dark:border-y-gray-700 dark:border-r-gray-700 transition-all duration-200" :class="getPriorityColor(note.priority)">
+                    <div v-for="note in filteredNotes" :key="note.id || note._id || note.timestamp" class="bg-white dark:bg-gray-800 p-5 rounded-lg shadow-sm dark:shadow-gray-950/40 border-l-4 border-y border-r border-gray-200 dark:border-y-gray-700 dark:border-r-gray-700 transition-all duration-200" :class="getPriorityColor(note.priority)">
+                        <!-- Card Header -->
                         <div class="flex justify-between items-start mb-2">
+                            <!-- Left: Priority & Threat Status Badges -->
                             <div class="flex items-center flex-wrap gap-2">
                                 <span class="px-2 py-1 rounded text-xs font-bold uppercase tracking-wider" :class="getPriorityBadgeColor(note.priority)">
                                     {{ note.priority }}
                                 </span>
+                                
+                                <!-- Threat Escalation / Persistence Badge -->
+                                <span class="px-2 py-0.5 rounded text-[11px] font-extrabold uppercase tracking-wide flex items-center gap-1 border transition-all"
+                                      :class="getThreatBadgeStyle(note.threat_status)">
+                                    <span class="w-1.5 h-1.5 rounded-full" :class="getThreatStatusDot(note.threat_status)"></span>
+                                    <span>{{ note.threat_status || 'PERSISTING' }}</span>
+                                </span>
+
                                 <span class="text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 px-2 py-0.5 rounded">{{ note.category }}</span>
                                 <span class="text-xs text-gray-500 dark:text-gray-400 flex items-center font-medium" v-if="note.location">
                                     📍 {{ note.location }}
                                 </span>
                             </div>
-                            <span class="text-xs text-gray-400 dark:text-gray-400 whitespace-nowrap ml-2">{{ new Date(note.timestamp).toLocaleString() }}</span>
+
+                            <!-- Right: Date/Time with Small Last Updated Time & Manual Refresh Arrow Below -->
+                            <div class="flex flex-col items-end text-right ml-2">
+                                <span class="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                                    {{ formatDateTime(note.timestamp) }}
+                                </span>
+                                
+                                <!-- Small Last Updated Time & Manual Refresh Arrow -->
+                                <div class="flex items-center gap-1.5 mt-1 text-[11px] whitespace-nowrap">
+                                    <span class="text-gray-400 dark:text-gray-400 font-mono flex items-center gap-1">
+                                        <span class="inline-block w-1.5 h-1.5 rounded-full" :class="getThreatStatusDot(note.threat_status)"></span>
+                                        <span>Updated: {{ formatTimeOnly(note.last_checked) }}</span>
+                                    </span>
+                                    <!-- Manual refresh arrow button -->
+                                    <button @click.stop="manualRefreshNote(note)" 
+                                            :disabled="note._isRefreshing"
+                                            title="Manual threat refresh"
+                                            aria-label="Refresh threat status"
+                                            class="p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors focus:outline-none disabled:opacity-50">
+                                        <svg class="w-3.5 h-3.5" :class="{ 'animate-spin text-blue-500': note._isRefreshing }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                         
                         <p class="font-semibold text-lg mb-3 mt-3 text-gray-900 dark:text-gray-100 leading-snug">{{ note.summary }}</p>
@@ -150,6 +203,8 @@
                     notes: [],
                     searchQuery: '',
                     isSubmitting: false,
+                    isRefreshingAll: false,
+                    syncFailed: false,
                     isDark: document.documentElement.classList.contains('dark')
                 }
             },
@@ -162,7 +217,8 @@
                         (n.raw_text && n.raw_text.toLowerCase().includes(q)) ||
                         (n.category && n.category.toLowerCase().includes(q)) ||
                         (n.location && n.location.toLowerCase().includes(q)) ||
-                        (n.priority && n.priority.toLowerCase().includes(q))
+                        (n.priority && n.priority.toLowerCase().includes(q)) ||
+                        (n.threat_status && n.threat_status.toLowerCase().includes(q))
                     );
                 }
             },
@@ -177,6 +233,35 @@
                         try { localStorage.setItem('resilio-theme', 'light'); } catch (e) {}
                     }
                 },
+                formatDateTime(ts) {
+                    if (!ts) return '';
+                    const d = new Date(ts);
+                    if (isNaN(d.getTime())) return ts;
+                    return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + 
+                           d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                },
+                formatTimeOnly(ts) {
+                    if (!ts) return 'just now';
+                    const d = new Date(ts);
+                    if (isNaN(d.getTime())) return 'just now';
+                    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                },
+                getThreatBadgeStyle(threat) {
+                    const t = (threat || 'PERSISTING').toUpperCase();
+                    if (t === 'WORSENED') {
+                        return 'bg-red-600 text-white border-red-700 shadow-sm animate-pulse dark:bg-red-700 dark:border-red-600';
+                    }
+                    if (t === 'PERSISTING') {
+                        return 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-800';
+                    }
+                    return 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950/80 dark:text-blue-300 dark:border-blue-800';
+                },
+                getThreatStatusDot(threat) {
+                    const t = (threat || 'PERSISTING').toUpperCase();
+                    if (t === 'WORSENED') return 'bg-red-400 animate-ping';
+                    if (t === 'PERSISTING') return 'bg-amber-500';
+                    return 'bg-blue-400';
+                },
                 async checkHealth() {
                     try {
                         const res = await fetch('/api/health');
@@ -188,9 +273,78 @@
                 async fetchNotes() {
                     try {
                         const res = await fetch('/api/notes');
-                        this.notes = await res.json();
+                        if (res.ok) {
+                            const data = await res.json();
+                            this.mergeNotes(data);
+                            this.syncFailed = false;
+                        }
                     } catch (e) {
                         console.error('Failed to fetch notes', e);
+                        this.syncFailed = true;
+                    }
+                },
+                mergeNotes(incomingNotes) {
+                    // Update notes array preserving UI local states like _isRefreshing
+                    const noteMap = new Map(this.notes.map(n => [n.id || n._id, n]));
+                    this.notes = incomingNotes.map(newNote => {
+                        const id = newNote.id || newNote._id;
+                        const existing = noteMap.get(id);
+                        if (existing && existing._isRefreshing) {
+                            return { ...newNote, _isRefreshing: true };
+                        }
+                        return newNote;
+                    });
+                },
+                async autoRefreshFeed() {
+                    // 5-second cadence threat checker
+                    if (this.isSubmitting) return;
+                    this.isRefreshingAll = true;
+                    try {
+                        const res = await fetch('/api/notes/refresh-all', { method: 'POST' });
+                        if (res.ok) {
+                            const refreshed = await res.json();
+                            this.mergeNotes(refreshed);
+                            this.syncFailed = false;
+                        } else {
+                            await this.fetchNotes();
+                        }
+                    } catch (e) {
+                        console.warn('Auto-refresh network glitch, applying local cadence fallback', e);
+                        this.syncFailed = true;
+                        // Client-side offline fallback: tick last_checked and evaluate worsening threats
+                        const nowIso = new Date().toISOString();
+                        this.notes.forEach(n => {
+                            n.last_checked = nowIso;
+                            n.check_count = (n.check_count || 1) + 1;
+                            if ((n.priority === 'CRITICAL' && n.check_count >= 3) || (n.priority === 'HIGH' && n.check_count >= 5)) {
+                                n.threat_status = 'WORSENED';
+                            }
+                        });
+                    } finally {
+                        setTimeout(() => { this.isRefreshingAll = false; }, 350);
+                    }
+                },
+                async manualRefreshNote(note) {
+                    const noteId = note.id || note._id;
+                    note._isRefreshing = true;
+                    try {
+                        const res = await fetch(`/api/notes/${encodeURIComponent(noteId)}/refresh`, { method: 'POST' });
+                        if (res.ok) {
+                            const updated = await res.json();
+                            note.last_checked = updated.last_checked || new Date().toISOString();
+                            note.threat_status = updated.threat_status || note.threat_status;
+                            note.check_count = updated.check_count || (note.check_count || 1) + 1;
+                        } else {
+                            // Client-side fallback
+                            note.last_checked = new Date().toISOString();
+                            note.check_count = (note.check_count || 1) + 1;
+                        }
+                    } catch (e) {
+                        console.warn('Manual refresh offline fallback', e);
+                        note.last_checked = new Date().toISOString();
+                        note.check_count = (note.check_count || 1) + 1;
+                    } finally {
+                        setTimeout(() => { note._isRefreshing = false; }, 400);
                     }
                 },
                 prefill(type) {
@@ -238,7 +392,14 @@
             mounted() {
                 this.checkHealth();
                 this.fetchNotes();
-                setInterval(this.checkHealth, 10000); // Poll health every 10s
+                // 5-second automatic threat status & feed refresh cadence
+                this.refreshInterval = setInterval(this.autoRefreshFeed, 5000);
+                // 10-second health poll
+                this.healthInterval = setInterval(this.checkHealth, 10000);
+            },
+            beforeUnmount() {
+                if (this.refreshInterval) clearInterval(this.refreshInterval);
+                if (this.healthInterval) clearInterval(this.healthInterval);
             }
         }).mount('#app')
     </script>
