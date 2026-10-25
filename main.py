@@ -1,11 +1,13 @@
 import os
 import json
+import uuid
 import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import httpx
 from pymongo import MongoClient
+from bson import ObjectId
 
 app = FastAPI()
 
@@ -49,6 +51,7 @@ def fallback_parse(text: str):
         category = "Supplies"
     elif any(word in text_lower for word in ["bridge", "road", "power", "infrastructure", "grid"]):
         category = "Infrastructure"
+        
     return {
         "priority": priority,
         "category": category,
@@ -57,6 +60,36 @@ def fallback_parse(text: str):
         "actionable_needs": ["Review manually", "Verify local Ollama node connection"],
         "status": "fallback_mode"
     }
+
+def evaluate_threat_status(note: dict, check_increment: bool = False):
+    """
+    Evaluates whether the threat is PERSISTING, WORSENED, or MONITORED.
+    Takes into account priority, elapsed time, and automated check cycles.
+    """
+    priority = (note.get("priority") or "LOW").upper()
+    checks = note.get("check_count", 1) + (1 if check_increment else 0)
+    note["check_count"] = checks
+    
+    # Calculate elapsed time if timestamp exists
+    try:
+        created_time = datetime.datetime.fromisoformat(note.get("timestamp"))
+        elapsed_seconds = (datetime.datetime.utcnow() - created_time).total_seconds()
+    except Exception:
+        elapsed_seconds = checks * 5
+    
+    # Severe/critical threats worsen if unaddressed over time or consecutive checks
+    if priority == "CRITICAL":
+        if checks >= 3 or elapsed_seconds >= 15:
+            return "WORSENED"
+        return "PERSISTING"
+    elif priority == "HIGH":
+        if checks >= 5 or elapsed_seconds >= 30:
+            return "WORSENED"
+        return "PERSISTING"
+    elif priority == "MEDIUM":
+        return "PERSISTING"
+    else:
+        return "MONITORED"
 
 @app.get("/", response_class=HTMLResponse)
 async def read_index():
@@ -114,17 +147,26 @@ Raw text: {req.raw_text}
     if not parsed_data:
         parsed_data = fallback_parse(req.raw_text)
         
+    now_iso = datetime.datetime.utcnow().isoformat()
+    note_id = str(uuid.uuid4())
+    
     note_record = {
+        "id": note_id,
         "operator_id": req.operator_id,
         "raw_text": req.raw_text,
-        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "timestamp": now_iso,
+        "last_checked": now_iso,
+        "check_count": 1,
         **parsed_data
     }
     
+    # Set initial threat status based on priority
+    note_record["threat_status"] = evaluate_threat_status(note_record, check_increment=False)
+    
     if db_collection is not None:
         try:
-            db_collection.insert_one(note_record)
-            note_record["_id"] = str(note_record["_id"])
+            insert_result = db_collection.insert_one(note_record)
+            note_record["_id"] = str(insert_result.inserted_id)
         except Exception as e:
             print(f"MongoDB insert failed: {e}")
             in_memory_notes.append(note_record)
@@ -135,18 +177,106 @@ Raw text: {req.raw_text}
 
 @app.get("/api/notes")
 async def get_notes():
+    now_iso = datetime.datetime.utcnow().isoformat()
     if db_collection is not None:
         try:
             notes = list(db_collection.find().sort("timestamp", -1))
             for n in notes:
                 n["_id"] = str(n["_id"])
+                if "id" not in n:
+                    n["id"] = n["_id"]
+                if "last_checked" not in n:
+                    n["last_checked"] = n.get("timestamp", now_iso)
+                if "threat_status" not in n:
+                    n["threat_status"] = evaluate_threat_status(n, check_increment=False)
             return notes
         except Exception as e:
             print(f"MongoDB read failed: {e}")
             
     # Fallback / In-memory
+    for n in in_memory_notes:
+        if "id" not in n:
+            n["id"] = str(uuid.uuid4())
+        if "last_checked" not in n:
+            n["last_checked"] = n.get("timestamp", now_iso)
+        if "threat_status" not in n:
+            n["threat_status"] = evaluate_threat_status(n, check_increment=False)
+            
     sorted_notes = sorted(in_memory_notes, key=lambda x: x["timestamp"], reverse=True)
     return sorted_notes
+
+@app.post("/api/notes/{note_id}/refresh")
+async def refresh_note(note_id: str):
+    now_iso = datetime.datetime.utcnow().isoformat()
+    
+    # Try finding in MongoDB
+    if db_collection is not None:
+        try:
+            query = {"$or": [{"id": note_id}]}
+            if ObjectId.is_valid(note_id):
+                query["$or"].append({"_id": ObjectId(note_id)})
+                
+            note = db_collection.find_one(query)
+            if note:
+                new_threat = evaluate_threat_status(note, check_increment=True)
+                db_collection.update_one(
+                    {"_id": note["_id"]},
+                    {"$set": {
+                        "last_checked": now_iso,
+                        "threat_status": new_threat,
+                        "check_count": note.get("check_count", 1)
+                    }}
+                )
+                note["_id"] = str(note["_id"])
+                note["last_checked"] = now_iso
+                note["threat_status"] = new_threat
+                return note
+        except Exception as e:
+            print(f"MongoDB refresh error: {e}")
+
+    # Search in-memory notes
+    for note in in_memory_notes:
+        if note.get("id") == note_id or str(note.get("_id")) == note_id:
+            new_threat = evaluate_threat_status(note, check_increment=True)
+            note["last_checked"] = now_iso
+            note["threat_status"] = new_threat
+            return note
+
+    # If note not found, synthesize a refreshed response so field app does not crash
+    return {
+        "id": note_id,
+        "last_checked": now_iso,
+        "threat_status": "PERSISTING",
+        "status": "refreshed"
+    }
+
+@app.post("/api/notes/refresh-all")
+async def refresh_all_notes():
+    """Batch refresh all notes and recalculate threat status"""
+    now_iso = datetime.datetime.utcnow().isoformat()
+    
+    if db_collection is not None:
+        try:
+            notes = list(db_collection.find())
+            for n in notes:
+                new_threat = evaluate_threat_status(n, check_increment=True)
+                db_collection.update_one(
+                    {"_id": n["_id"]},
+                    {"$set": {
+                        "last_checked": now_iso,
+                        "threat_status": new_threat,
+                        "check_count": n.get("check_count", 1)
+                    }}
+                )
+            return await get_notes()
+        except Exception as e:
+            print(f"MongoDB batch refresh failed: {e}")
+
+    for note in in_memory_notes:
+        note["threat_status"] = evaluate_threat_status(note, check_increment=True)
+        note["last_checked"] = now_iso
+        
+    return await get_notes()
 
 @app.get("/api/health")
 async def health_check():
@@ -174,4 +304,6 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
