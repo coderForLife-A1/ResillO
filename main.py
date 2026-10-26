@@ -4,12 +4,28 @@ import uuid
 import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
 from pymongo import MongoClient
 from bson import ObjectId
 
 app = FastAPI()
+
+# Native shells (Electron and Capacitor) call the same API as the browser UI.
+# Keep the allow-list configurable so deployments do not need code changes.
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,capacitor://localhost,http://localhost,https://localhost").split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # In-memory storage fallback
 in_memory_notes = []
@@ -125,7 +141,7 @@ Raw text: {req.raw_text}
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                "http://localhost:11434/api/generate",
+                f"{os.getenv('OLLAMA_URL', 'http://localhost:11434').rstrip('/')}/api/generate",
                 json={
                     "model": "gemma:2b",
                     "prompt": prompt,
@@ -283,7 +299,10 @@ async def health_check():
     ollama_online = False
     try:
         async with httpx.AsyncClient() as client:
-            res = await client.get("http://localhost:11434/", timeout=2.0)
+            res = await client.get(
+                f"{os.getenv('OLLAMA_URL', 'http://localhost:11434').rstrip('/')}/",
+                timeout=2.0,
+            )
             if res.status_code == 200:
                 ollama_online = True
     except:
@@ -304,6 +323,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ResillO</string>
+    <string name="title_activity_main">ResillO</string>
+    <string name="package_name">com.resillo.triage</string>
+    <string name="custom_url_scheme">com.resillo.triage</string>
+</resources>
