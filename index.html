@@ -24,6 +24,20 @@
                 console.error('Failed to access theme from localStorage', e);
             }
         })();
+
+        // Native builds can provide an API endpoint through a query parameter or
+        // persisted setting while the browser build continues to use same-origin.
+        (function() {
+            const params = new URLSearchParams(window.location.search);
+            const configuredBase = params.get('api') || window.RESILIO_API_BASE;
+            if (configuredBase) {
+                localStorage.setItem('resilio-api-base', configuredBase.replace(/\/+$/, ''));
+            }
+            window.resilioApiUrl = function(path) {
+                const base = (localStorage.getItem('resilio-api-base') || '').replace(/\/+$/, '');
+                return base ? `${base}${path}` : path;
+            };
+        })();
     </script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
 </head>
@@ -58,6 +72,11 @@
                         {{ health.db_online ? 'ONLINE' : 'FALLBACK (MEM)' }}
                     </span>
                 </div>
+
+                <button @click="configureApi" title="Configure the ResillO API server"
+                        class="px-3 py-1.5 rounded-lg border font-semibold text-xs tracking-wider bg-gray-100 hover:bg-gray-200 text-gray-800 border-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-gray-100 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm">
+                    API SERVER
+                </button>
 
                 <!-- Light/Dark Mode Toggle Button -->
                 <button @click="toggleTheme" 
@@ -198,6 +217,7 @@
         createApp({
             data() {
                 return {
+                    apiBase: localStorage.getItem('resilio-api-base') || '',
                     health: { ollama_online: false, db_online: false },
                     rawText: '',
                     notes: [],
@@ -262,9 +282,25 @@
                     if (t === 'PERSISTING') return 'bg-amber-500';
                     return 'bg-blue-400';
                 },
+                configureApi() {
+                    const current = this.apiBase || window.location.origin;
+                    const configured = window.prompt(
+                        'ResillO API URL (leave blank for this server):',
+                        current
+                    );
+                    if (configured === null) return;
+                    this.apiBase = configured.trim().replace(/\/+$/, '');
+                    if (this.apiBase && this.apiBase !== window.location.origin) {
+                        localStorage.setItem('resilio-api-base', this.apiBase);
+                    } else {
+                        localStorage.removeItem('resilio-api-base');
+                    }
+                    this.checkHealth();
+                    this.fetchNotes();
+                },
                 async checkHealth() {
                     try {
-                        const res = await fetch('/api/health');
+                        const res = await fetch(window.resilioApiUrl('/api/health'));
                         this.health = await res.json();
                     } catch (e) {
                         console.error('Health check failed', e);
@@ -272,7 +308,7 @@
                 },
                 async fetchNotes() {
                     try {
-                        const res = await fetch('/api/notes');
+                        const res = await fetch(window.resilioApiUrl('/api/notes'));
                         if (res.ok) {
                             const data = await res.json();
                             this.mergeNotes(data);
@@ -300,7 +336,7 @@
                     if (this.isSubmitting) return;
                     this.isRefreshingAll = true;
                     try {
-                        const res = await fetch('/api/notes/refresh-all', { method: 'POST' });
+                        const res = await fetch(window.resilioApiUrl('/api/notes/refresh-all'), { method: 'POST' });
                         if (res.ok) {
                             const refreshed = await res.json();
                             this.mergeNotes(refreshed);
@@ -328,7 +364,7 @@
                     const noteId = note.id || note._id;
                     note._isRefreshing = true;
                     try {
-                        const res = await fetch(`/api/notes/${encodeURIComponent(noteId)}/refresh`, { method: 'POST' });
+                        const res = await fetch(window.resilioApiUrl(`/api/notes/${encodeURIComponent(noteId)}/refresh`), { method: 'POST' });
                         if (res.ok) {
                             const updated = await res.json();
                             note.last_checked = updated.last_checked || new Date().toISOString();
@@ -359,7 +395,7 @@
                     if (!this.rawText.trim()) return;
                     this.isSubmitting = true;
                     try {
-                        const res = await fetch('/api/notes', {
+                        const res = await fetch(window.resilioApiUrl('/api/notes'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ raw_text: this.rawText, operator_id: 'OP-001' })

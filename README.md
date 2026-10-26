@@ -34,6 +34,48 @@ uvicorn main:app --reload
 ```
 Open http://127.0.0.1:8000
 
+## Desktop app
+
+The desktop shell uses the same FastAPI server and dashboard as the browser build. It
+starts the local backend automatically, so triage, Ollama, MongoDB, and the in-memory
+fallback behave identically across desktop and browser.
+
+Install Node.js, then run:
+
+```bash
+npm install
+npm run desktop
+```
+
+The shell expects the Python environment used by `python` to have the dependencies from
+`requirements.txt`. Set `RESILIO_PYTHON` if a different interpreter should be used:
+
+```powershell
+$env:RESILIO_PYTHON="C:\path\to\.venv\Scripts\python.exe"
+npm run desktop
+```
+
+## Android app
+
+The Android build is a Capacitor shell around the same `index.html`; no triage logic is
+duplicated in Java/Kotlin. The API must run on a reachable computer or deployment because
+Android cannot run the Python backend inside the APK.
+
+```bash
+npm install
+npm run android:add       # first build only; creates the android/ project
+npm run android:sync
+npm run android:open
+```
+
+For an Android emulator with the backend running on the development computer, set the API
+server in the dashboard's **API SERVER** button to `http://10.0.2.2:8000`. For a physical
+device, use the computer's LAN address (for example `http://192.168.1.20:8000`) and allow
+port 8000 through the local firewall. Use HTTPS for production deployments.
+
+The selected API URL is persisted on the device. Browser users continue to use same-origin
+requests unless they explicitly configure another server.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -42,6 +84,7 @@ Open http://127.0.0.1:8000
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
 | `OLLAMA_MODEL` | `gemma:2b` | Model used for triage |
 | `OLLAMA_TIMEOUT` | `180` | Seconds to wait for the model (first load is slow) |
+| `CORS_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000,capacitor://localhost,http://localhost,https://localhost` | Comma-separated native/web origins allowed to call the API |
 
 ## API
 
@@ -69,6 +112,9 @@ curl -X POST http://127.0.0.1:8000/api/notes \
 ```
 main.py            FastAPI backend
 index.html         Tailwind dark-mode dashboard
+desktop/main.cjs   Electron desktop shell
+capacitor.config.ts Capacitor Android configuration
+package.json       Desktop/mobile scripts and dependencies
 requirements.txt
 README.md
 ```
