@@ -3,3 +3,4 @@ uvicorn
 pymongo
 httpx
 pydantic
+pytest

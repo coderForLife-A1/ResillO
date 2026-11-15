@@ -212,6 +212,39 @@
     </div>
 
     <script>
+        const offlineStore = (() => {
+            let database;
+            function open() {
+                if (database) return database;
+                database = new Promise((resolve, reject) => {
+                    const request = indexedDB.open('resillo-local', 1);
+                    request.onupgradeneeded = () => {
+                        const db = request.result;
+                        if (!db.objectStoreNames.contains('notes')) db.createObjectStore('notes', { keyPath: 'id' });
+                        if (!db.objectStoreNames.contains('outbox')) db.createObjectStore('outbox', { keyPath: 'key' });
+                    };
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error);
+                });
+                return database;
+            }
+            async function transaction(store, mode, action) {
+                const db = await open();
+                return new Promise((resolve, reject) => {
+                    const request = action(db.transaction(store, mode).objectStore(store));
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error);
+                });
+            }
+            return {
+                all: () => transaction('notes', 'readonly', store => store.getAll()),
+                save: note => transaction('notes', 'readwrite', store => store.put(note)),
+                queue: item => transaction('outbox', 'readwrite', store => store.put(item)),
+                pending: () => transaction('outbox', 'readonly', store => store.getAll()),
+                remove: key => transaction('outbox', 'readwrite', store => store.delete(key))
+            };
+        })();
+
         const { createApp } = Vue
 
         createApp({
@@ -307,16 +340,37 @@
                     }
                 },
                 async fetchNotes() {
+                    this.notes = await offlineStore.all();
                     try {
-                        const res = await fetch(window.resilioApiUrl('/api/notes'));
+                        const tokenResponse = await fetch(window.resilioApiUrl('/api/auth/token'));
+                        if (tokenResponse.ok) localStorage.setItem('resilio-api-token', (await tokenResponse.json()).token);
+                        const res = await fetch(window.resilioApiUrl('/api/notes'), { headers: { 'X-Resillo-Token': localStorage.getItem('resilio-api-token') || '' } });
                         if (res.ok) {
                             const data = await res.json();
                             this.mergeNotes(data);
+                            await Promise.all(data.map(note => offlineStore.save(note)));
+                            await this.flushOutbox();
                             this.syncFailed = false;
                         }
                     } catch (e) {
                         console.error('Failed to fetch notes', e);
                         this.syncFailed = true;
+                    }
+                },
+                async flushOutbox() {
+                    const pending = await offlineStore.pending();
+                    for (const item of pending) {
+                        try {
+                            const response = await fetch(window.resilioApiUrl('/api/notes'), {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'X-Resillo-Token': localStorage.getItem('resilio-api-token') || '' },
+                                body: JSON.stringify(item.payload)
+                            });
+                            if (response.ok) await offlineStore.remove(item.key);
+                        } catch (error) {
+                            console.warn('Outbox remains queued while backend is unavailable', error);
+                            break;
+                        }
                     }
                 },
                 mergeNotes(incomingNotes) {
@@ -394,18 +448,42 @@
                 async submitNote() {
                     if (!this.rawText.trim()) return;
                     this.isSubmitting = true;
+                    const rawText = this.rawText.trim();
+                    const now = new Date().toISOString();
+                    const note = {
+                        id: crypto.randomUUID(),
+                        operator_id: 'OP-001',
+                        raw_text: rawText,
+                        timestamp: now,
+                        revision: 1,
+                        triage_status: 'pending',
+                        priority: /critical|collapse|death|severe/i.test(rawText) ? 'CRITICAL' : /urgent|shortage|emergency/i.test(rawText) ? 'HIGH' : 'LOW',
+                        category: /medical|doctor|blood|injur/i.test(rawText) ? 'Medical' : /water|food|supplies|generator/i.test(rawText) ? 'Supplies' : /road|bridge|power|grid|collapse/i.test(rawText) ? 'Infrastructure' : 'Status Update',
+                        location: 'Unknown',
+                        summary: rawText.slice(0, 100),
+                        actionable_needs: ['Pending triage'],
+                        threat_status: 'MONITORED',
+                        check_count: 1,
+                        last_checked: now,
+                        human_override: false
+                    };
+                    await offlineStore.save(note);
+                    this.notes = [note, ...this.notes.filter(existing => existing.id !== note.id)];
+                    await offlineStore.queue({ key: note.id, payload: { id: note.id, raw_text: rawText, operator_id: note.operator_id } });
+                    this.rawText = '';
                     try {
                         const res = await fetch(window.resilioApiUrl('/api/notes'), {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ raw_text: this.rawText, operator_id: 'OP-001' })
+                            headers: { 'Content-Type': 'application/json', 'X-Resillo-Token': localStorage.getItem('resilio-api-token') || '' },
+                            body: JSON.stringify({ id: note.id, raw_text: rawText, operator_id: 'OP-001' })
                         });
                         if (res.ok) {
-                            this.rawText = '';
+                            await offlineStore.remove(note.id);
                             await this.fetchNotes();
                         }
-                    } catch (e) {
-                        console.error('Submit failed', e);
+                    } catch (error) {
+                        this.syncFailed = true;
+                        console.warn('Note captured locally and queued for sync', error);
                     } finally {
                         this.isSubmitting = false;
                     }
