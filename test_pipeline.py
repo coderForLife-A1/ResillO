@@ -4,7 +4,7 @@ import sys
 
 API_BASE = "http://localhost:8000"
 
-def test_pipeline():
+def run_pipeline():
     print("--- Resilio Local E2E Test ---")
     
     # 1. Test backend health

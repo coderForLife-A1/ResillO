@@ -57,3 +57,7 @@ www/
 android/.gradle/
 android/build/
 android/app/build/
+hs_err_pid*.log
+replay_pid*.log
+*.token
+runtime/

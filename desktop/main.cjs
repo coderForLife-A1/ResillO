@@ -6,6 +6,8 @@ const path = require("path");
 const HOST = "127.0.0.1";
 const PORT = 8000;
 let backend;
+let stopping = false;
+let restartTimer;
 
 function waitForBackend() {
   return new Promise((resolve, reject) => {
@@ -40,6 +42,17 @@ async function createWindow() {
     { cwd: path.join(__dirname, ".."), windowsHide: true, stdio: "ignore" }
   );
   backend.on("error", (error) => console.error("Could not start ResillO backend:", error));
+  backend.on("exit", (code, signal) => {
+    backend = undefined;
+    if (!stopping) {
+      const delay = code === 0 ? 250 : 1000;
+      restartTimer = setTimeout(() => createWindow().catch((error) => {
+        console.error("ResillO backend restart failed:", error);
+        app.quit();
+      }), delay);
+    }
+    console.warn(`ResillO backend exited (${code ?? "null"}/${signal ?? "none"})`);
+  });
 
   await waitForBackend();
   const window = new BrowserWindow({
@@ -62,10 +75,14 @@ app.whenReady().then(() => createWindow().catch((error) => {
 }));
 
 app.on("window-all-closed", () => {
-  if (backend && !backend.killed) backend.kill();
+  stopping = true;
+  if (restartTimer) clearTimeout(restartTimer);
+  if (backend && !backend.killed) backend.kill("SIGTERM");
   if (process.platform !== "darwin") app.quit();
 });
 
 app.on("before-quit", () => {
-  if (backend && !backend.killed) backend.kill();
+  stopping = true;
+  if (restartTimer) clearTimeout(restartTimer);
+  if (backend && !backend.killed) backend.kill("SIGTERM");
 });
