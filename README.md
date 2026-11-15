@@ -26,7 +26,7 @@ export MONGO_URI="mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?retryWr
 # Windows PowerShell: $env:MONGO_URI="..."
 ```
 Data goes to database `field_notes`, collection `triaged_reports`.
-If `MONGO_URI` is missing or unreachable, ResillO falls back to **in-memory storage** (data is lost on restart). The header badge shows which mode is active.
+ResillO stores notes durably in SQLite at `data/resillo.sqlite3` by default; set `RESILIO_DB_PATH` to change it.
 
 ### 4. Run
 ```bash
@@ -37,8 +37,7 @@ Open http://127.0.0.1:8000
 ## Desktop app
 
 The desktop shell uses the same FastAPI server and dashboard as the browser build. It
-starts the local backend automatically, so triage, Ollama, MongoDB, and the in-memory
-fallback behave identically across desktop and browser.
+starts the local backend automatically, with durable local storage and asynchronous triage.
 
 Install Node.js, then run:
 
@@ -80,10 +79,12 @@ requests unless they explicitly configure another server.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MONGO_URI` | *(empty)* | MongoDB connection string; empty means in-memory |
+| `RESILIO_DB_PATH` | `data/resillo.sqlite3` | Durable SQLite database path |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
 | `OLLAMA_MODEL` | `gemma:2b` | Model used for triage |
-| `OLLAMA_TIMEOUT` | `180` | Seconds to wait for the model (first load is slow) |
+| `OLLAMA_CONNECT_TIMEOUT` | `0.5` | Ollama connection timeout |
+| `OLLAMA_READ_TIMEOUT` | `2` | Ollama read timeout |
+| `RESILIO_API_TOKEN` | generated locally | Local API token |
 | `CORS_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000,capacitor://localhost,http://localhost,https://localhost` | Comma-separated native/web origins allowed to call the API |
 
 ## API
@@ -94,7 +95,7 @@ requests unless they explicitly configure another server.
 | POST | `/api/notes` | Body: `{"raw_text": "...", "operator_id": "..."}`; triages and stores a note |
 | GET | `/api/notes` | All notes, newest first |
 | GET | `/api/search?q=water` | Keyword search with emergency-term synonym expansion |
-| GET | `/api/status` | Ollama and storage status (powers the header badges) |
+| GET | `/api/health` | DB, queue, and Ollama circuit diagnostics |
 
 Try it:
 ```bash
@@ -105,7 +106,7 @@ curl -X POST http://127.0.0.1:8000/api/notes \
 
 ## Resilience
 - **Ollama down or bad JSON:** the note is still triaged by a keyword rule engine and tagged `rule-based` in the UI, so reports are never lost.
-- **MongoDB down:** notes are kept in memory, and the app retries the connection periodically.
+- **API or Ollama down:** notes remain in IndexedDB and the explicit outbox retries later.
 - **Model output drift:** responses are validated and normalized to the strict schema (`CRITICAL|HIGH|MEDIUM|LOW`, four categories).
 
 ## Project layout
