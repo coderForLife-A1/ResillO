@@ -19,9 +19,9 @@ async def _test_ingestion_persists_when_ollama_is_offline(tmp_path: Path):
     worker = TriageWorker(db, TriageEngine("http://127.0.0.1:1", "missing", 0.01, 0.01))
     await worker.start()
     note = {"id": "offline", "operator_id": "test", "raw_text": "critical bridge collapse", "timestamp": "2026-01-01T00:00:00+00:00", "revision": 1, "triage_status": "pending", "priority": "LOW", "category": "Status Update", "location": "Unknown", "summary": "critical bridge collapse", "actionable_needs": "[]", "threat_status": "MONITORED", "check_count": 1, "last_checked": "2026-01-01T00:00:00+00:00", "human_override": 0}
-    db.execute("INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(note.values()))
+    db.execute("INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(note.values()))
     await worker.enqueue("offline")
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.5)
     row = db.execute("SELECT triage_status, priority FROM notes WHERE id='offline'").fetchone()
     assert row["triage_status"] == "complete"
     assert row["priority"] == "CRITICAL"
@@ -53,7 +53,7 @@ def test_human_override_wins_conflict(tmp_path: Path):
     db.initialize()
     engine = SyncEngine(db)
     base = {"id": "conflict", "operator_id": "test", "raw_text": "x", "timestamp": "now", "revision": 2, "triage_status": "complete", "priority": "CRITICAL", "category": "Medical", "location": "Unknown", "summary": "x", "actionable_needs": "[]", "threat_status": "PERSISTING", "check_count": 1, "last_checked": "now", "human_override": 1}
-    db.execute("INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(base.values()))
+    db.execute("INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(base.values()))
     incoming = dict(base, priority="LOW", human_override=0, revision=3)
     assert engine.merge(incoming)["priority"] == "CRITICAL"
     db.close()

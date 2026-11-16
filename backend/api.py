@@ -47,7 +47,7 @@ def create_router(db: Database, worker: TriageWorker, settings: Settings) -> API
             raise HTTPException(status_code=413, detail="payload too large")
         timestamp = datetime.now(timezone.utc).isoformat()
         note = {"id": req.id or str(uuid4()), "operator_id": req.operator_id, "raw_text": req.raw_text, "timestamp": timestamp, "revision": 1, "triage_status": "pending", "priority": "LOW", "category": "Status Update", "location": "Unknown", "summary": req.raw_text[:100], "actionable_needs": json.dumps(["Pending triage"]), "threat_status": "MONITORED", "check_count": 1, "last_checked": timestamp, "human_override": 0}
-        db.execute("INSERT OR IGNORE INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(note.values()))
+        db.execute("INSERT OR IGNORE INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(note.values()))
         SyncEngine(db).append_event(note, content_key(note))
         await worker.enqueue(note["id"])
         return db.decode(db.execute("SELECT * FROM notes WHERE id=?", (note["id"],)).fetchone())
@@ -63,7 +63,7 @@ def create_router(db: Database, worker: TriageWorker, settings: Settings) -> API
         sync_engine = SyncEngine(db)
         for incoming in payload.notes:
             incoming["actionable_needs"] = json.dumps(incoming.get("actionable_needs", []))
-            if sync_engine.append_event(incoming, key):
+            if sync_engine.append_event(incoming, f"{key}:{incoming.get('id', '')}"):
                 sync_engine.merge(incoming)
                 accepted += 1
         return {"accepted": accepted, "idempotency_key": key}

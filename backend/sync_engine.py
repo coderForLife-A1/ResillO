@@ -42,7 +42,7 @@ class SyncEngine:
     def merge(self, incoming: dict[str, Any]) -> dict[str, Any]:
         existing_row = self.db.execute("SELECT * FROM notes WHERE id=?", (incoming["id"],)).fetchone()
         if existing_row is None:
-            self.db.execute("INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(incoming[field] for field in ("id", "operator_id", "raw_text", "timestamp", "revision", "triage_status", "priority", "category", "location", "summary", "actionable_needs", "threat_status", "check_count", "last_checked", "human_override")) )
+            self.db.execute(            "INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(incoming[field] for field in ("id", "operator_id", "raw_text", "timestamp", "revision", "triage_status", "priority", "category", "location", "summary", "actionable_needs", "threat_status", "check_count", "last_checked", "human_override")) )
             return incoming
         existing = self.db.decode(existing_row)
         if existing["human_override"] or (existing["priority"] == "CRITICAL" and incoming["priority"] != "CRITICAL"):
