@@ -21,8 +21,12 @@ async def _test_ingestion_persists_when_ollama_is_offline(tmp_path: Path):
     note = {"id": "offline", "operator_id": "test", "raw_text": "critical bridge collapse", "timestamp": "2026-01-01T00:00:00+00:00", "revision": 1, "triage_status": "pending", "priority": "LOW", "category": "Status Update", "location": "Unknown", "summary": "critical bridge collapse", "actionable_needs": "[]", "threat_status": "MONITORED", "check_count": 1, "last_checked": "2026-01-01T00:00:00+00:00", "human_override": 0}
     db.execute("INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(note.values()))
     await worker.enqueue("offline")
-    await asyncio.sleep(0.5)
-    row = db.execute("SELECT triage_status, priority FROM notes WHERE id='offline'").fetchone()
+    for _ in range(30):
+        row = db.execute("SELECT triage_status, priority FROM notes WHERE id='offline'").fetchone()
+        if row and row["triage_status"] == "complete":
+            break
+        await asyncio.sleep(0.1)
+    assert row is not None
     assert row["triage_status"] == "complete"
     assert row["priority"] == "CRITICAL"
     await worker.stop()

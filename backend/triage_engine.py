@@ -13,6 +13,9 @@ class CircuitBreaker:
         self.threshold = threshold
         self.cooldown = cooldown
         self.failures = 0
+        self.total_failures = 0
+        self.total_successes = 0
+        self.trips_count = 0
         self.opened_at = 0.0
 
     @property
@@ -21,13 +24,29 @@ class CircuitBreaker:
             return "open"
         return "half-open" if self.opened_at else "closed"
 
+    @property
+    def info(self) -> dict[str, Any]:
+        cooldown_remaining = max(0.0, self.cooldown - (time.monotonic() - self.opened_at)) if self.opened_at else 0.0
+        return {
+            "state": self.state,
+            "trips": self.trips_count,
+            "current_failures": self.failures,
+            "total_failures": self.total_failures,
+            "total_successes": self.total_successes,
+            "cooldown_remaining_seconds": round(cooldown_remaining, 2),
+        }
+
     def success(self) -> None:
         self.failures = 0
         self.opened_at = 0.0
+        self.total_successes += 1
 
     def failure(self) -> None:
         self.failures += 1
+        self.total_failures += 1
         if self.failures >= self.threshold:
+            if not self.opened_at or time.monotonic() - self.opened_at >= self.cooldown:
+                self.trips_count += 1
             self.opened_at = time.monotonic()
 
 

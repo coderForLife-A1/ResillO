@@ -12,8 +12,14 @@ class TriageWorker:
     def __init__(self, db: Database, engine: TriageEngine) -> None:
         self.db = db
         self.engine = engine
-        self.queue: asyncio.Queue[str] = asyncio.Queue()
+        self._queue: asyncio.Queue[str] | None = None
         self.task: asyncio.Task[None] | None = None
+
+    @property
+    def queue(self) -> asyncio.Queue[str]:
+        if self._queue is None:
+            self._queue = asyncio.Queue()
+        return self._queue
 
     async def start(self) -> None:
         self.task = asyncio.create_task(self.run())

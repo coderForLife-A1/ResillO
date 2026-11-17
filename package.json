@@ -5,12 +5,16 @@
   "description": "Native desktop and Android shells for the ResillO triage dashboard",
   "main": "desktop/main.cjs",
   "scripts": {
-    "desktop": "electron .",
+    "prepare:assets": "node scripts/prepare-mobile.cjs",
+    "desktop": "npm run prepare:assets && electron .",
     "desktop:dev": "electron .",
-    "android:add": "node scripts/prepare-mobile.cjs && cap add android",
-    "android:sync": "node scripts/prepare-mobile.cjs && cap sync android",
-    "android:open": "cap open android",
-    "android:run": "cap run android"
+    "android:add": "npm run prepare:assets && npx cap add android",
+    "android:sync": "npm run prepare:assets && npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:run": "npx cap run android",
+    "build:desktop": "npm run prepare:assets && electron .",
+    "build:mobile": "npm run prepare:assets && npx cap sync android",
+    "build": "npm run prepare:assets && npm run build:mobile"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.0",

@@ -366,9 +366,16 @@
                                 headers: { 'Content-Type': 'application/json', 'X-Resillo-Token': localStorage.getItem('resilio-api-token') || '' },
                                 body: JSON.stringify(item.payload)
                             });
-                            if (response.ok) await offlineStore.remove(item.key);
+                            if (response.ok) {
+                                await offlineStore.remove(item.key);
+                            } else {
+                                this.syncFailed = true;
+                                console.warn(`Outbox preservation: backend returned ${response.status}, keeping item ${item.key}`);
+                                break;
+                            }
                         } catch (error) {
                             console.warn('Outbox remains queued while backend is unavailable', error);
+                            this.syncFailed = true;
                             break;
                         }
                     }
@@ -480,6 +487,9 @@
                         if (res.ok) {
                             await offlineStore.remove(note.id);
                             await this.fetchNotes();
+                        } else {
+                            this.syncFailed = true;
+                            console.warn('Storage error or backend unavailable, preserving note in outbox. Status:', res.status);
                         }
                     } catch (error) {
                         this.syncFailed = true;

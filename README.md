@@ -192,6 +192,7 @@ ResillO provides a lightweight, token-secured REST API:
 |---|---|---|
 | `GET` | `/` | Web dashboard single-page interface |
 | `GET` | `/api/health` | Diagnostics for DB, queue depth, and Ollama circuit status |
+| `GET` | `/api/diagnostics` | Protected operational telemetry (queue depth, circuit trips, conflicts, sanitized errors) |
 | `GET` | `/api/auth/token` | Retrieve local session authorization token |
 | `POST` | `/api/notes` | Ingest and enqueue raw field note for triage |
 | `GET` | `/api/notes` | Fetch all triaged notes (sorted newest first) |
@@ -235,6 +236,138 @@ curl -X POST http://127.0.0.1:8000/api/notes \
   "last_checked": "2026-11-16T17:00:01.000Z",
   "human_override": false
 }
+```
+
+---
+
+## 🏕️ 7-Day Unassisted Field Dogfood & Recovery Guide
+
+This protocol guides first responders and field engineers conducting autonomous, air-gapped 7-day field deployments without external connectivity or administrative intervention.
+
+### 1. Pre-Flight Cold-Start Bootstrap (Single Command)
+Before deploying hardware into the field, execute the automated pre-flight bootstrap script to validate the environment:
+
+```bash
+python scripts/verify_cold_start.py
+```
+
+The script verifies five critical layers:
+1. **Python Dependencies:** Validates runtime libraries (`fastapi`, `uvicorn`, `httpx`, `pydantic`, `pytest`, `sqlite3`).
+2. **Database Schema & Indexes:** Verifies `WAL` mode, `FULL` synchronous disk writes, table schemas (`notes`, `events`), indexes (`notes_timestamp`, `notes_triage`, `events_note`), and write readiness.
+3. **Local Authentication:** Verifies `.token` persistence and SHA-256 token digest.
+4. **Ollama & Deterministic Fallback:** Probes local Ollama inference and verifies < 50ms regex/keyword fallback triage with 3-strike circuit breaker failover.
+5. **Mobile/Web Asset Sync:** Validates byte-for-byte synchronization between `index.html` and `www/index.html`.
+
+---
+
+### 2. Operational Monitoring & Diagnostics Cadence
+During the 7-day trial, monitor node health without leaking sensitive field reports using the token-protected diagnostics API:
+
+```bash
+# Query sanitized system telemetry
+TOKEN=$(cat data/resillo.token)
+curl -s http://127.0.0.1:8000/api/diagnostics -H "X-Resillo-Token: $TOKEN" | jq .
+```
+
+#### Sanitized Telemetry Schema
+```json
+{
+  "status": "healthy",
+  "uptime_seconds": 86400.0,
+  "queue_depth": 0,
+  "circuit_breaker": {
+    "state": "closed",
+    "trips": 0,
+    "current_failures": 0,
+    "total_failures": 2,
+    "total_successes": 412,
+    "cooldown_remaining_seconds": 0.0
+  },
+  "conflicts": {
+    "detected_in_session": 3,
+    "total_notes": 85,
+    "total_events": 92,
+    "divergent_events": 7
+  },
+  "storage": {
+    "db_online": true,
+    "is_writable": true,
+    "database_path": "data/resillo.sqlite3",
+    "database_size_bytes": 147456
+  },
+  "recent_errors": []
+}
+```
+
+> [!NOTE]
+> **Data Privacy Guarantee**: `/api/diagnostics` exports sanitized error codes and technical summaries only. Note text, casualties, locations, and operator identifiers are stripped by regex sanitizers before export.
+
+#### Bounded Storage Log Rotation
+Log storage is strictly bounded to prevent disk exhaustion on resource-constrained field hardware:
+- **Max File Size:** `1 MB` (`RESILIO_LOG_MAX_BYTES=1048576`)
+- **Max Rotated Files:** `5` backups (`RESILIO_LOG_BACKUP_COUNT=5`)
+- **Storage Cap:** Bounded to **~5 MB total log footprint** over the entire 7-day deployment. Logs rotate automatically into `data/logs/resillo.log.1` ... `.5`.
+
+---
+
+### 3. Storage & Disaster Recovery Runbook
+
+#### Scenario A: Abrupt Power Loss / Hard Crash
+- **Behavior:** SQLite WAL mode with `PRAGMA synchronous = FULL` commits every transaction directly to disk.
+- **Recovery:** Simply restart the service:
+  ```bash
+  python -m uvicorn main:app --host 127.0.0.1 --port 8000
+  ```
+  SQLite will automatically replay uncheckpointed WAL frames on startup with zero database corruption.
+
+#### Scenario B: Disk-Full Storage Error (`507 Insufficient Storage`)
+- **Symptom:** API returns HTTP `507` with `{"error": "storage_failure", "code": "DISK_FULL", "recoverable": true}`.
+- **Client Outbox Durability:** Client browser and mobile apps detect the 507 status and immediately halt queue draining, safely preserving un-synced notes in local IndexedDB without data loss.
+- **Remediation:**
+  1. Free temporary disk space or purge expired diagnostic archives:
+     ```bash
+     rm -rf /tmp/* data/logs/*.log.*
+     ```
+  2. Verify write readiness:
+     ```bash
+     curl -s http://127.0.0.1:8000/api/diagnostics -H "X-Resillo-Token: $TOKEN" | grep '"is_writable":true'
+     ```
+  3. Client outboxes will automatically flush pending triage reports on the next 5-second sync cadence.
+
+#### Scenario C: Read-Only Filesystem / Lockup (`503 Service Unavailable`)
+- **Symptom:** API returns HTTP `503` with `{"error": "storage_failure", "code": "DATABASE_READONLY", "recoverable": true}`.
+- **Client Outbox Durability:** Client outboxes preserve all field reports in IndexedDB storage.
+- **Remediation:**
+  1. Check filesystem mount permissions:
+     ```bash
+     mount -o remount,rw /data
+     chmod 664 data/resillo.sqlite3*
+     ```
+  2. Once writable, the backend resumes accepting writes and client outboxes drain automatically.
+
+#### Scenario D: Token Loss / Desynchronization
+- If the client loses the authorization token:
+  1. Read the persisted local token directly:
+     ```bash
+     cat data/resillo.token
+     ```
+  2. Paste into the client settings dialog via **API SERVER** button in the top navigation bar.
+
+---
+
+### 4. Deterministic Native Build Commands
+
+Run deterministic build and asset synchronization scripts:
+
+```bash
+# Sync web assets to mobile directory and run Capacitor Android sync
+npm run build:mobile
+
+# Deterministic Electron desktop launch
+npm run build:desktop
+
+# Complete full asset & native bundle verification
+npm run build
 ```
 
 ---

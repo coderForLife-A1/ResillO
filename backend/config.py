@@ -16,6 +16,9 @@ class Settings:
         self.connect_timeout = float(os.getenv("OLLAMA_CONNECT_TIMEOUT", "0.5"))
         self.read_timeout = float(os.getenv("OLLAMA_READ_TIMEOUT", "2.0"))
         self.max_payload = int(os.getenv("RESILIO_MAX_PAYLOAD", "65536"))
+        self.log_dir = Path(os.getenv("RESILIO_LOG_DIR", "data/logs"))
+        self.log_max_bytes = int(os.getenv("RESILIO_LOG_MAX_BYTES", "1048576"))
+        self.log_backup_count = int(os.getenv("RESILIO_LOG_BACKUP_COUNT", "5"))
         self.api_token = os.getenv("RESILIO_API_TOKEN") or self._load_token()
         self.cors_origins = tuple(
             item.strip() for item in os.getenv(

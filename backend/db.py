@@ -60,9 +60,33 @@ class Database:
         except sqlite3.Error:
             return False
 
+    def is_writable(self) -> bool:
+        if self.connection is None:
+            return False
+        try:
+            with self.lock:
+                cursor = self.connection.cursor()
+                cursor.execute("PRAGMA query_only")
+                row = cursor.fetchone()
+                cursor.close()
+                if row and row[0]:
+                    return False
+            return True
+        except sqlite3.Error:
+            return False
+
     @staticmethod
     def decode(row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
-        result["actionable_needs"] = json.loads(result["actionable_needs"])
-        result["human_override"] = bool(result["human_override"])
+        raw_needs = result.get("actionable_needs", "[]")
+        if isinstance(raw_needs, str):
+            try:
+                result["actionable_needs"] = json.loads(raw_needs)
+            except Exception:
+                result["actionable_needs"] = [raw_needs]
+        elif isinstance(raw_needs, (list, tuple)):
+            result["actionable_needs"] = list(raw_needs)
+        else:
+            result["actionable_needs"] = []
+        result["human_override"] = bool(result.get("human_override", 0))
         return result
