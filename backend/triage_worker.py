@@ -22,6 +22,11 @@ class TriageWorker:
         return self._queue
 
     async def start(self) -> None:
+        pending = self.db.execute(
+            "SELECT id FROM notes WHERE triage_status = 'pending'"
+        ).fetchall()
+        for row in pending:
+            await self.queue.put(row["id"])
         self.task = asyncio.create_task(self.run())
 
     async def stop(self) -> None:
