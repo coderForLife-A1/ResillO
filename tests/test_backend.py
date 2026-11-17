@@ -13,6 +13,39 @@ def test_ingestion_persists_when_ollama_is_offline(tmp_path: Path):
     asyncio.run(_test_ingestion_persists_when_ollama_is_offline(tmp_path))
 
 
+def test_worker_requeues_pending_notes_after_restart(tmp_path: Path):
+    db = Database(tmp_path / "restart.sqlite3")
+    db.initialize()
+    note = {
+        "id": "restart-pending",
+        "operator_id": "test",
+        "raw_text": "pending after restart",
+        "timestamp": "now",
+        "revision": 1,
+        "triage_status": "pending",
+        "priority": "LOW",
+        "category": "Status Update",
+        "location": "Unknown",
+        "summary": "pending",
+        "actionable_needs": "[]",
+        "threat_status": "MONITORED",
+        "check_count": 1,
+        "last_checked": "now",
+        "human_override": 0,
+    }
+    db.execute("INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(note.values()))
+    worker = TriageWorker(db, TriageEngine("http://127.0.0.1:1", "mock", 0.01, 0.01))
+
+    async def start_and_stop() -> int:
+        await worker.start()
+        depth = worker.queue.qsize()
+        await worker.stop()
+        return depth
+
+    assert asyncio.run(start_and_stop()) == 1
+    db.close()
+
+
 async def _test_ingestion_persists_when_ollama_is_offline(tmp_path: Path):
     db = Database(tmp_path / "notes.sqlite3")
     db.initialize()

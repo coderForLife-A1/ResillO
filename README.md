@@ -308,6 +308,50 @@ Log storage is strictly bounded to prevent disk exhaustion on resource-constrain
 - **Max Rotated Files:** `5` backups (`RESILIO_LOG_BACKUP_COUNT=5`)
 - **Storage Cap:** Bounded to **~5 MB total log footprint** over the entire 7-day deployment. Logs rotate automatically into `data/logs/resillo.log.1` ... `.5`.
 
+#### Daily 5-Minute Dogfood Audit
+Run this exact audit once at the start of every field day. It authenticates to the protected diagnostics endpoint, checks SQLite integrity, verifies the rotating-log cap, and waits for the backend triage queue to drain:
+
+```bash
+python scripts/dogfood_check.py
+```
+
+PowerShell equivalent:
+
+```powershell
+python .\scripts\dogfood_check.py
+```
+
+The command must finish with `PASS dogfood_check: all checks passed` and exit code `0`. It is intentionally strict: stop the trial and reset the 7-day clock immediately for any `FAIL`, HTTP/API authentication error, database integrity error, queue that does not drain within 30 seconds, log-cap violation, missing note, duplicate note, orphaned process, or UI freeze.
+
+#### Reboot and Force-Stop Recovery Check
+At least once before Day 1 and after every device or app restart:
+
+1. Record the current audit result:
+   ```bash
+   python scripts/dogfood_check.py
+   ```
+2. Force-stop the desktop window or Android package, then launch ResillO again. On Android:
+   ```bash
+   adb shell am force-stop com.resillo.triage
+   adb shell monkey -p com.resillo.triage 1
+   ```
+3. Run the audit again:
+   ```bash
+   python scripts/dogfood_check.py
+   ```
+4. Confirm the previously captured IndexedDB outbox notes are visible exactly once and that the diagnostics `queue_depth` returns to `0`.
+
+The browser/Capacitor IndexedDB outbox is durable across force-stop/reboot and flushes on the next successful launch. SQLite stores pending triage notes durably; the backend re-enqueues every `pending` note during startup, so pending jobs resume without user intervention. Any missing, duplicated, or permanently pending item is a hard failure.
+
+#### Seven-Day Daily Record
+Copy one line per day into the field log:
+
+```text
+Day __ / Date __________ / dogfood_check exit=__ / queue drain=__s / notes reconciled=YES|NO / orphaned processes=0|NO / UI freeze=NO|YES / operator=________
+```
+
+Do not continue the trial after a hard failure. Preserve the diagnostics output and reset Day 1 only after the cause is corrected and the recovery check passes twice.
+
 ---
 
 ### 3. Storage & Disaster Recovery Runbook
