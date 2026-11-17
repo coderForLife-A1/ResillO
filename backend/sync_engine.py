@@ -38,8 +38,14 @@ def now() -> str:
 
 
 class SyncEngine:
+    total_conflicts: int = 0
+
     def __init__(self, db: Database) -> None:
         self.db = db
+
+    @classmethod
+    def get_conflict_count(cls) -> int:
+        return cls.total_conflicts
 
     def append_event(self, note: dict[str, Any], key: str) -> bool:
         payload = dict(note)
@@ -82,6 +88,7 @@ class SyncEngine:
             )
             return incoming
 
+        SyncEngine.total_conflicts += 1
         existing = self.db.decode(existing_row)
 
         # 1. Human override cannot be silently replaced by a non-human override

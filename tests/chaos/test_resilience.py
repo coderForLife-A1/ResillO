@@ -451,3 +451,120 @@ def test_batch_sync_idempotency_and_storage_error_handling(tmp_path: Path):
         assert "Traceback" not in res_fail.text
 
     db.close()
+
+
+def test_protected_diagnostics_endpoint_and_sanitized_errors(tmp_path: Path):
+    """
+    Test protected /diagnostics endpoint:
+    - Rejects unauthorized requests with 401
+    - Exports sanitized queue depth, circuit breaker trips, conflict counts, and errors
+    - Never leaks sensitive note text or patient/operator details in error exports
+    """
+    from backend.diagnostics import record_error, setup_logging
+
+    db = Database(tmp_path / "notes_diag.sqlite3")
+    db.initialize()
+    engine = TriageEngine("http://127.0.0.1:1", "mock", 0.01, 0.01)
+    worker = TriageWorker(db, engine)
+
+    settings = Settings()
+    settings.database_path = tmp_path / "notes_diag.sqlite3"
+    token = settings.api_token
+
+    app = FastAPI()
+    app.include_router(create_router(db, worker, settings))
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # 1. Unauthorized request must fail
+    res_unauth = client.get("/api/diagnostics")
+    assert res_unauth.status_code == 401, "Protected diagnostics must reject missing token"
+
+    # 2. Trigger circuit breaker failure and trips
+    for _ in range(4):
+        engine.breaker.failure()
+    assert engine.breaker.trips_count >= 1
+
+    # 3. Simulate a merge conflict to increment conflict stats
+    sync = SyncEngine(db)
+    base_note = {
+        "id": "diag-note-1",
+        "operator_id": "MED-1",
+        "raw_text": "Base triage note",
+        "timestamp": "2026-11-17T10:00:00Z",
+        "revision": 1,
+        "triage_status": "complete",
+        "priority": "HIGH",
+        "category": "Medical",
+        "location": "Hospital",
+        "summary": "Base",
+        "actionable_needs": "[]",
+        "threat_status": "PERSISTING",
+        "check_count": 1,
+        "last_checked": "2026-11-17T10:00:00Z",
+        "human_override": 0,
+    }
+    sync.merge(base_note)
+    # Concurrent conflicting edit on same note id
+    conflict_note = dict(base_note, revision=2, priority="CRITICAL")
+    sync.merge(conflict_note)
+
+    # 4. Record an operational error containing sensitive medical and casualty details
+    sensitive_raw_text = "Patient John Doe with severe blast trauma and restricted identity ID-89423984729"
+    record_error(
+        code="STORAGE_ERROR",
+        message=f"Error inserting record VALUES('{sensitive_raw_text}') into notes",
+        endpoint="/api/notes",
+    )
+
+    # 5. Query authorized diagnostics endpoint
+    res_diag = client.get("/api/diagnostics", headers={"X-Resillo-Token": token})
+    assert res_diag.status_code == 200
+    diag = res_diag.json()
+
+    # Validate structure and metrics
+    assert "queue_depth" in diag
+    assert "circuit_breaker" in diag
+    assert diag["circuit_breaker"]["trips"] >= 1
+    assert "conflicts" in diag
+    assert diag["conflicts"]["detected_in_session"] >= 1
+    assert "storage" in diag
+    assert diag["storage"]["db_online"] is True
+    assert diag["storage"]["is_writable"] is True
+
+    # Validate that sensitive text is sanitized and NOT leaked
+    assert "recent_errors" in diag
+    assert len(diag["recent_errors"]) >= 1
+    error_texts = [e["message"] for e in diag["recent_errors"]]
+    combined_errors = " ".join(error_texts)
+
+    assert sensitive_raw_text not in combined_errors, "Sensitive note raw text leaked in error telemetry!"
+    assert "John Doe" not in combined_errors
+    assert "ID-89423984729" not in combined_errors
+
+    db.close()
+
+
+def test_rotating_file_logger_caps_storage(tmp_path: Path):
+    """
+    Test rotating file handler caps log storage size and file count:
+    - Bounded log files prevent storage from filling during long-running trials
+    """
+    from backend.diagnostics import setup_logging
+
+    log_dir = tmp_path / "logs"
+    max_bytes = 1024  # 1 KB per file
+    backup_count = 3  # Max 3 backups (total max 4 files, ~4KB)
+
+    diag_logger = setup_logging(log_dir, max_bytes=max_bytes, backup_count=backup_count)
+
+    # Write enough logs to trigger multiple rotations (>10KB)
+    for i in range(200):
+        diag_logger.info(f"Log event #{i:04d}: System heartbeat and operational metrics for long-running dogfood trial.")
+
+    log_files = list(log_dir.glob("resillo.log*"))
+    assert len(log_files) <= backup_count + 1, f"Expected at most {backup_count + 1} files, found {len(log_files)}"
+
+    total_size = sum(f.stat().st_size for f in log_files)
+    # Total size should not exceed (backup_count + 1) * max_bytes + safety margin
+    assert total_size <= (backup_count + 2) * max_bytes * 1.5, f"Log storage grew unbounded: {total_size} bytes"
+

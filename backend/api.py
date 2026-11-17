@@ -11,11 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .config import Settings
 from .db import Database
+from .diagnostics import get_diagnostics, record_error
 from .sync_engine import SyncEngine, content_key
 from .triage_worker import TriageWorker
 
 
-def storage_error_response(error: Exception) -> JSONResponse:
+def storage_error_response(error: Exception, endpoint: str = "/api/notes") -> JSONResponse:
     msg = str(error)
     lower = msg.lower()
     if "full" in lower:
@@ -31,6 +32,7 @@ def storage_error_response(error: Exception) -> JSONResponse:
         status_code = 503
         code = "STORAGE_ERROR"
 
+    record_error(code, msg, endpoint=endpoint)
     return JSONResponse(
         status_code=status_code,
         content={
@@ -70,6 +72,10 @@ def create_router(db: Database, worker: TriageWorker, settings: Settings) -> API
     async def health() -> dict[str, object]:
         return {"db_online": db.health(), "queue_depth": worker.queue.qsize(), "ollama_circuit": worker.engine.breaker.state, "ollama_online": worker.engine.breaker.state == "closed"}
 
+    @router.get("/diagnostics", dependencies=[Depends(authorized)])
+    async def diagnostics() -> dict[str, object]:
+        return get_diagnostics(db, worker, SyncEngine.get_conflict_count())
+
     @router.post("/notes", dependencies=[Depends(authorized)])
     async def create_note(req: NoteRequest, request: Request):
         if request.headers.get("content-length") and int(request.headers["content-length"]) > settings.max_payload:
@@ -80,21 +86,21 @@ def create_router(db: Database, worker: TriageWorker, settings: Settings) -> API
             db.execute("INSERT OR IGNORE INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(note.values()))
             SyncEngine(db).append_event(note, content_key(note))
         except sqlite3.Error as exc:
-            return storage_error_response(exc)
+            return storage_error_response(exc, endpoint="/api/notes")
 
         await worker.enqueue(note["id"])
         try:
             row = db.execute("SELECT * FROM notes WHERE id=?", (note["id"],)).fetchone()
             return db.decode(row) if row else note
         except sqlite3.Error as exc:
-            return storage_error_response(exc)
+            return storage_error_response(exc, endpoint="/api/notes")
 
     @router.get("/notes", dependencies=[Depends(authorized)])
     async def notes():
         try:
             return [db.decode(row) for row in db.execute("SELECT * FROM notes ORDER BY timestamp DESC").fetchall()]
         except sqlite3.Error as exc:
-            return storage_error_response(exc)
+            return storage_error_response(exc, endpoint="/api/notes")
 
     @router.post("/sync", dependencies=[Depends(authorized)])
     async def sync(payload: SyncRequest, x_idempotency_key: str | None = Header(default=None)):
@@ -115,7 +121,7 @@ def create_router(db: Database, worker: TriageWorker, settings: Settings) -> API
                     sync_engine.merge(incoming)
                     accepted += 1
         except sqlite3.Error as exc:
-            return storage_error_response(exc)
+            return storage_error_response(exc, endpoint="/api/sync")
         return {"accepted": accepted, "idempotency_key": key}
 
     @router.post("/notes/{note_id}/refresh", dependencies=[Depends(authorized)])
@@ -134,7 +140,7 @@ def create_router(db: Database, worker: TriageWorker, settings: Settings) -> API
             db.execute("UPDATE notes SET check_count=?,last_checked=?,threat_status=?,revision=revision+1 WHERE id=?", (note["check_count"], note["last_checked"], note["threat_status"], note_id))
             return db.decode(db.execute("SELECT * FROM notes WHERE id=?", (note_id,)).fetchone())
         except sqlite3.Error as exc:
-            return storage_error_response(exc)
+            return storage_error_response(exc, endpoint=f"/api/notes/{note_id}/refresh")
 
     @router.post("/notes/refresh-all", dependencies=[Depends(authorized)])
     async def refresh_all():
@@ -143,6 +149,6 @@ def create_router(db: Database, worker: TriageWorker, settings: Settings) -> API
                 await refresh(row["id"])
             return await notes()
         except sqlite3.Error as exc:
-            return storage_error_response(exc)
+            return storage_error_response(exc, endpoint="/api/notes/refresh-all")
 
     return router
