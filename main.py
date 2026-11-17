@@ -1,10 +1,11 @@
 from contextlib import asynccontextmanager
+import sqlite3
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-from backend.api import create_router
+from backend.api import create_router, storage_error_response
 from backend.config import settings
 from backend.db import Database
 from backend.triage_engine import TriageEngine
@@ -28,6 +29,13 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["Content-Type", "Authorization", "X-Resillo-Token"])
+
+
+@app.exception_handler(sqlite3.Error)
+async def db_exception_handler(_: Request, exc: sqlite3.Error):
+    return storage_error_response(exc)
+
+
 app.include_router(create_router(db, worker, settings))
 
 
