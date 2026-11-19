@@ -1,457 +1,336 @@
 # 🛡️ ResillO
 
 <p align="center">
-  <strong>Mission-Critical, Offline-First Emergency Field Notes Triage Platform</strong>
+  <strong>Offline-first emergency field-note triage for unreliable environments</strong>
 </p>
 
 <p align="center">
-  <a href="#key-features"><img src="https://img.shields.io/badge/Status-Field%20Ready-success?style=flat-square" alt="Status"></a>
-  <a href="#tech-stack"><img src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI"></a>
-  <a href="#tech-stack"><img src="https://img.shields.io/badge/SQLite-WAL%20Mode-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite"></a>
-  <a href="#tech-stack"><img src="https://img.shields.io/badge/Ollama-Gemma%202B-black?style=flat-square&logo=ollama&logoColor=white" alt="Ollama"></a>
-  <a href="#tech-stack"><img src="https://img.shields.io/badge/TailwindCSS-Dark%20Mode-38B2AC?style=flat-square&logo=tailwind-css&logoColor=white" alt="Tailwind"></a>
-  <a href="#tech-stack"><img src="https://img.shields.io/badge/Platforms-Desktop%20%7C%20Android%20%7C%20Web-blue?style=flat-square" alt="Platforms"></a>
+  <a href="#features"><img src="https://img.shields.io/badge/status-field--ready-16a34a?style=for-the-badge" alt="Field ready"></a>
+  <a href="#architecture"><img src="https://img.shields.io/badge/API-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI"></a>
+  <a href="#features"><img src="https://img.shields.io/badge/storage-SQLite%20WAL-003B57?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite WAL"></a>
+  <a href="#native-clients"><img src="https://img.shields.io/badge/clients-Web%20%7C%20Electron%20%7C%20Android-2563eb?style=for-the-badge" alt="Web, Electron, and Android"></a>
 </p>
 
----
+ResillO turns unstructured field reports into actionable triage records for first responders, humanitarian teams, and emergency operators. It is designed for connectivity gaps, local deployments, and abrupt restarts: reports are captured locally, persisted durably, and classified by local AI when available or by a deterministic fallback when it is not.
 
-## 📌 Overview
+> **Safety boundary:** ResillO is an operational aid, not a replacement for trained human judgment, established emergency procedures, or verified communications.
 
-**ResillO** is designed for first responders, humanitarian aid teams, and field operators navigating connectivity-dead zones, post-disaster areas, and hostile environments. 
+## Why ResillO
 
-It transforms unstructured, chaotic field notes into structured, actionable triage intelligence (Priority, Category, Location, Summary, and Immediate Needs) using **on-device, local open-weight AI (Gemma 2B via Ollama)**—ensuring **zero data ever leaves the local perimeter**.
+- **Works through connectivity loss.** The web client stores reports in an IndexedDB outbox and retries them when the API returns.
+- **Keeps ingestion responsive.** API writes complete before background triage; Ollama failures do not block report capture.
+- **Fails over predictably.** A three-failure circuit breaker routes classification to a local keyword/rule engine.
+- **Survives restarts.** SQLite uses WAL mode and `FULL` synchronous writes. Pending notes are re-enqueued when the worker starts.
+- **Supports intermittent synchronization.** An append-only event log, idempotency keys, and severity-aware conflict merging protect replayed and out-of-order updates.
+- **Runs locally.** The default configuration uses local SQLite and a local Ollama daemon; no cloud AI service is required.
 
-> [!IMPORTANT]
-> **Zero Data Loss Guarantee**: If local AI hangs, crashes, or is offline, ResillO’s **Circuit Breaker** instantly switches to an inline deterministic rule engine. Ingestion never blocks, and field reports are never lost.
+## Features
 
----
+| Area | Capability |
+| --- | --- |
+| Field capture | Vue-based responsive dashboard, dark/light theme, report templates, live feed, and manual API-server configuration |
+| Triage | Priority (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`), category, location, summary, and actionable needs |
+| Threat monitoring | Five-second refresh cadence, per-note refresh, check counts, and escalation to `WORSENED` |
+| Resilience | Ollama circuit breaker, deterministic fallback parsing, background queue, and startup recovery |
+| Storage | SQLite database with WAL, `FULL` synchronous mode, indexes, rotating logs, and local token persistence |
+| Sync | SHA-256 content keys, idempotent event append, replay protection, and higher-severity conflict preservation |
+| Packaging | Browser deployment, Electron desktop shell, and Capacitor Android wrapper |
 
-## 🏗️ System Architecture
+## Architecture
 
 ```mermaid
-flowchart TD
-    subgraph Clients["Field Clients"]
-        WEB["🌐 Browser UI\n(IndexedDB Outbox)"]
-        DSK["💻 Electron App\n(Local Bundle)"]
-        AND["📱 Android App\n(Capacitor Shell)"]
+flowchart LR
+    subgraph Clients
+        WEB[Web dashboard]
+        DESKTOP[Electron]
+        ANDROID[Android / Capacitor]
     end
 
-    subgraph Gateway["ResillO Core (FastAPI)"]
-        API["REST Ingestion API\n/api/notes"]
-        AUTH["Token Guard & Auth"]
-        SYNC["Sync & Conflict Engine\n(Event Log & Idempotency)"]
+    subgraph Core[FastAPI service]
+        API[REST API]
+        QUEUE[Async triage queue]
+        WORKER[Background worker]
+        BREAKER{Circuit breaker}
+        FALLBACK[Deterministic fallback]
+        OLLAMA[Ollama / local model]
     end
 
-    subgraph Storage["Durable Storage"]
-        DB[("SQLite 3\n(WAL + FULL Synchronous)")]
-    end
+    DB[(SQLite WAL)]
+    EVENTS[(Event log)]
 
-    subgraph TriagePipeline["Resilient Triage Pipeline"]
-        QUEUE["Async Triage Queue"]
-        WORKER["Background Triage Worker"]
-        CB{"Circuit Breaker"}
-        LLM["🦙 Ollama (Gemma:2b)\nLocal JSON Inference"]
-        FALLBACK["⚡ Deterministic Fallback\nRegex & Keyword Rule Engine"]
-    end
-
-    WEB & DSK & AND -->|HTTP / JSON| AUTH
-    AUTH --> API
-    API -->|Atomic Write| DB
-    API -->|Append Event| SYNC
-    API -->|Push Task| QUEUE
-    QUEUE --> WORKER
-    WORKER --> CB
-    CB -->|Closed / Healthy| LLM
-    CB -->|Open / Timeout| FALLBACK
-    LLM -.->|Classified| DB
-    FALLBACK -.->|Rule-Classified| DB
+    WEB --> API
+    DESKTOP --> API
+    ANDROID --> API
+    API --> DB
+    API --> EVENTS
+    API --> QUEUE --> WORKER --> BREAKER
+    BREAKER -->|healthy| OLLAMA
+    BREAKER -->|open or timeout| FALLBACK
+    OLLAMA --> DB
+    FALLBACK --> DB
 ```
 
----
+## Requirements
 
-## ✨ Key Features
+- Python 3.10+ recommended
+- Node.js and npm for Electron/Android tooling
+- Android Studio and an Android SDK for native Android builds
+- Ollama is optional. Install it only when local LLM triage is desired; fallback triage works without it.
 
-| Capability | Description |
-|---|---|
-| **🔒 Air-Gapped Intelligence** | Powered by local open-weight models (Gemma 2B via Ollama). Operates in complete radio silence with no external cloud dependencies. |
-| **⚡ Multi-Tier Resilience** | Automatic 3-strike circuit breaker with cooldown isolation. Instant failover to keyword triage if Ollama stalls or crashes. |
-| **🛡️ Crash-Durable Storage** | SQLite running with `WAL` (Write-Ahead Logging) and `FULL` synchronous disk flush guarantees zero database corruption on abrupt power loss. |
-| **🔁 Idempotent Event Sourcing** | SHA-256 payload content hashing and UUID event sequencing prevents duplicate processing across intermittent mesh synchronizations. |
-| **📲 Multi-Platform Support** | Unified dark-mode UI with native packaging for **Web**, **Electron Desktop**, and **Android (Capacitor)**. |
+> **Air-gapped UI note:** the current dashboard references Vue and Tailwind through public CDNs. The backend and triage pipeline remain local, but a fully disconnected UI deployment should vendor those browser assets before deployment.
 
----
+## Quick start
 
-## 🚀 Quickstart (5 Minutes)
-
-### 1. Start the Local AI Model
-ResillO uses [Ollama](https://ollama.com) to run models locally on your CPU/GPU:
+### 1. Install Python dependencies
 
 ```bash
-# 1. Pull the compact Gemma 2B model (~1.7 GB)
-ollama pull gemma:2b
+git clone https://github.com/coderForLife-A1/ResillO.git
+cd ResillO
 
-# 2. Verify model runs (type /bye to exit)
-ollama run gemma:2b
-```
-> [!NOTE]
-> Ensure Ollama is serving at `http://localhost:11434` (run `ollama serve` if not started as a system service).
-
----
-
-### 2. Set Up the Python Backend
-
-```bash
-# Clone the repository
-git clone https://github.com/your-org/resillo.git
-cd resillo
-
-# Create and activate virtual environment
 python -m venv .venv
 
-# On Linux/macOS:
+# Linux/macOS
 source .venv/bin/activate
-# On Windows (PowerShell):
-.venv\Scripts\Activate.ps1
 
-# Install dependencies
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
 pip install -r requirements.txt
 ```
 
----
+### 2. Optional: enable local AI triage
 
-### 3. Launch ResillO
+Install [Ollama](https://ollama.com), then:
 
 ```bash
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
+ollama pull gemma:2b
+ollama serve
 ```
-Open your browser at [http://127.0.0.1:8000](http://127.0.0.1:8000) to access the operator dashboard.
 
----
+The service defaults to `http://127.0.0.1:11434`. If Ollama is unavailable, ResillO automatically uses deterministic fallback triage.
 
-## 💻 Native Client Builds
-
-### Electron Desktop App
-The desktop application automatically bundles and manages the local backend process:
+### 3. Start the API and dashboard
 
 ```bash
-# Install Node dependencies
-npm install
+python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
 
-# Start the desktop application
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+On first startup, ResillO creates the SQLite database at `data/resillo.sqlite3` and the local API token at `data/resillo.token` unless overridden by configuration.
+
+## Native clients
+
+Install JavaScript dependencies once:
+
+```bash
+npm install
+```
+
+### Electron desktop
+
+The desktop shell starts the backend, waits for `/api/health`, opens the dashboard, and attempts to restart the backend if it exits unexpectedly.
+
+```bash
 npm run desktop
 ```
 
-> [!TIP]
-> If your Python virtual environment is in a non-default path, specify it via:
-> ```powershell
-> $env:RESILIO_PYTHON="D:\path\to\.venv\Scripts\python.exe"
-> npm run desktop
-> ```
+To use a specific Python interpreter on Windows:
 
-### Android Mobile App (Capacitor)
-The mobile client packages the field UI into an offline-ready APK:
-
-```bash
-# Initialize Android project (first-time only)
-npm run android:add
-
-# Sync assets and open in Android Studio
-npm run android:sync
-npm run android:open
+```powershell
+$env:RESILIO_PYTHON = "D:\path\to\.venv\Scripts\python.exe"
+npm run desktop
 ```
 
-* **Android Emulator:** Set the API Server URL in the app's settings dialog to `http://10.0.2.2:8000`.
-* **Physical Device:** Connect over local Wi-Fi / ad-hoc network and set the server URL to your host machine's LAN IP (e.g. `http://192.168.1.50:8000`).
+`npm run desktop:dev` launches Electron without preparing the copied web asset first.
 
----
+### Android / Capacitor
 
-## ⚙️ Configuration Reference
+```bash
+# First-time project creation
+npm run android:add
 
-All settings can be customized through environment variables or a local `.env` file:
+# Copy index.html to www/ and synchronize the native project
+npm run android:sync
 
-| Environment Variable | Default | Purpose |
-|---|---|---|
-| `RESILIO_HOST` | `127.0.0.1` | Host interface to bind the API server |
-| `RESILIO_PORT` | `8000` | Port for the API service |
-| `RESILIO_DB_PATH` | `data/resillo.sqlite3` | File path for persistent SQLite database |
-| `RESILIO_API_TOKEN` | *Auto-generated* | Secret token stored in `.token` file |
-| `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama daemon endpoint |
-| `OLLAMA_MODEL` | `gemma:2b` | Ollama model tag for inference |
-| `OLLAMA_CONNECT_TIMEOUT` | `0.5` | Connection timeout in seconds |
-| `OLLAMA_READ_TIMEOUT` | `2.0` | Read timeout before triggering circuit breaker |
-| `RESILIO_MAX_PAYLOAD` | `65536` | Maximum allowed request payload size (bytes) |
-| `CORS_ORIGINS` | *Localhost, Capacitor* | Allowed origins for cross-origin access |
+# Open the project in Android Studio
+npm run android:open
 
----
+# Build/run on a connected device or emulator
+npm run android:run
+```
 
-## 📡 REST API Reference
+Use the dashboard's **API SERVER** button to configure the backend URL:
 
-ResillO provides a lightweight, token-secured REST API:
+- Android emulator: `http://10.0.2.2:8000`
+- Physical device: `http://<host-LAN-IP>:8000`
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/` | Web dashboard single-page interface |
-| `GET` | `/api/health` | Diagnostics for DB, queue depth, and Ollama circuit status |
-| `GET` | `/api/diagnostics` | Protected operational telemetry (queue depth, circuit trips, conflicts, sanitized errors) |
-| `GET` | `/api/auth/token` | Retrieve local session authorization token |
-| `POST` | `/api/notes` | Ingest and enqueue raw field note for triage |
-| `GET` | `/api/notes` | Fetch all triaged notes (sorted newest first) |
-| `POST` | `/api/notes/{id}/refresh` | Trigger threat re-evaluation & escalation counter |
-| `POST` | `/api/notes/refresh-all` | Batch update assessment states across all active notes |
-| `POST` | `/api/sync` | Reconcile peer-to-peer event logs with conflict resolution |
+The Android application ID is `com.resillo.triage`. The source dashboard is [index.html](index.html); the Capacitor web directory is [www/](www/).
 
-### Sample Ingestion Request
+## Configuration
+
+Configuration is read from environment variables. A `.env` file is not loaded automatically.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RESILIO_HOST` | `127.0.0.1` | API bind address |
+| `RESILIO_PORT` | `8000` | API port |
+| `RESILIO_DB_PATH` | `data/resillo.sqlite3` | SQLite database path; the token file uses the same path with a `.token` suffix |
+| `RESILIO_API_TOKEN` | generated locally | Explicit API token override |
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama endpoint |
+| `OLLAMA_MODEL` | `gemma:2b` | Ollama model tag |
+| `OLLAMA_CONNECT_TIMEOUT` | `0.5` | Ollama connection timeout in seconds |
+| `OLLAMA_READ_TIMEOUT` | `2.0` | Ollama response timeout in seconds |
+| `RESILIO_MAX_PAYLOAD` | `65536` | Maximum request content length in bytes |
+| `RESILIO_LOG_DIR` | `data/logs` | Rotating log directory |
+| `RESILIO_LOG_MAX_BYTES` | `1048576` | Maximum size of each log file |
+| `RESILIO_LOG_BACKUP_COUNT` | `5` | Number of rotated log backups |
+| `CORS_ORIGINS` | localhost + Capacitor origins | Comma-separated allowed origins |
+
+For protected API calls, send the token as `X-Resillo-Token: <token>` or `Authorization: Bearer <token>`.
+
+## REST API
+
+| Method | Endpoint | Auth | Purpose |
+| --- | --- | :---: | --- |
+| `GET` | `/` | No | Serve the dashboard |
+| `GET` | `/api/health` | No | Return database, queue, and circuit status |
+| `GET` | `/api/auth/token` | No | Return the local session token |
+| `GET` | `/api/diagnostics` | Yes | Return sanitized operational telemetry |
+| `POST` | `/api/notes` | Yes | Persist and enqueue a field note |
+| `GET` | `/api/notes` | Yes | List notes, newest first |
+| `POST` | `/api/notes/{id}/refresh` | Yes | Re-check a note and update threat state |
+| `POST` | `/api/notes/refresh-all` | Yes | Re-check all notes |
+| `POST` | `/api/sync` | Yes | Merge event-log updates with idempotency protection |
+
+### Create a note
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/notes \
   -H "Content-Type: application/json" \
-  -H "X-Resillo-Token: <YOUR_TOKEN>" \
-  -d '{
-    "raw_text": "Sector 4 bridge collapsed. 3 casualties reported, urgent medical supplies and generator required.",
-    "operator_id": "RESCUE-UNIT-07"
-  }'
+  -H "X-Resillo-Token: <TOKEN>" \
+  -d "{\"raw_text\":\"Bridge collapsed in Sector 4; urgent medical supplies required.\",\"operator_id\":\"RESCUE-07\"}"
 ```
 
-### Sample Triage Response
+The initial response is persisted with `triage_status: "pending"`. The background worker updates it to `complete` after Ollama or fallback classification finishes.
 
-```json
-{
-  "id": "c3a504be-bfd2-43ce-9a3d-4c33c3e6cf50",
-  "operator_id": "RESCUE-UNIT-07",
-  "raw_text": "Sector 4 bridge collapsed. 3 casualties reported, urgent medical supplies and generator required.",
-  "timestamp": "2026-11-16T17:00:00.000Z",
-  "revision": 2,
-  "triage_status": "complete",
-  "priority": "CRITICAL",
-  "category": "Infrastructure",
-  "location": "Sector 4 bridge",
-  "summary": "Sector 4 bridge collapsed with 3 casualties; medical supplies and generator urgently needed.",
-  "actionable_needs": [
-    "Medical supplies",
-    "Power generator",
-    "Search and rescue team"
-  ],
-  "threat_status": "MONITORED",
-  "check_count": 1,
-  "last_checked": "2026-11-16T17:00:01.000Z",
-  "human_override": false
-}
+### Health and diagnostics
+
+```bash
+curl http://127.0.0.1:8000/api/health
+
+# Linux/macOS
+TOKEN=$(cat data/resillo.token)
+curl -H "X-Resillo-Token: $TOKEN" http://127.0.0.1:8000/api/diagnostics
+
+# Windows PowerShell
+$token = Get-Content .\data\resillo.token
+Invoke-RestMethod http://127.0.0.1:8000/api/diagnostics -Headers @{"X-Resillo-Token" = $token}
 ```
 
----
+Diagnostics contain queue depth, circuit-breaker counters, storage status, conflict counts, and sanitized recent errors. They do not intentionally expose report text or operator identifiers.
 
-## 🏕️ 7-Day Unassisted Field Dogfood & Recovery Guide
+## Operations and recovery
 
-This protocol guides first responders and field engineers conducting autonomous, air-gapped 7-day field deployments without external connectivity or administrative intervention.
+### Cold-start verification
 
-### 1. Pre-Flight Cold-Start Bootstrap (Single Command)
-Before deploying hardware into the field, execute the automated pre-flight bootstrap script to validate the environment:
+Run the five-stage pre-flight check before a field deployment:
 
 ```bash
 python scripts/verify_cold_start.py
 ```
 
-The script verifies five critical layers:
-1. **Python Dependencies:** Validates runtime libraries (`fastapi`, `uvicorn`, `httpx`, `pydantic`, `pytest`, `sqlite3`).
-2. **Database Schema & Indexes:** Verifies `WAL` mode, `FULL` synchronous disk writes, table schemas (`notes`, `events`), indexes (`notes_timestamp`, `notes_triage`, `events_note`), and write readiness.
-3. **Local Authentication:** Verifies `.token` persistence and SHA-256 token digest.
-4. **Ollama & Deterministic Fallback:** Probes local Ollama inference and verifies < 50ms regex/keyword fallback triage with 3-strike circuit breaker failover.
-5. **Mobile/Web Asset Sync:** Validates byte-for-byte synchronization between `index.html` and `www/index.html`.
+It verifies Python imports, SQLite WAL/`FULL` mode and indexes, token persistence, fallback/circuit-breaker readiness, and synchronization between [index.html](index.html) and [www/index.html](www/index.html).
 
----
+### Daily dogfood audit
 
-### 2. Operational Monitoring & Diagnostics Cadence
-During the 7-day trial, monitor node health without leaking sensitive field reports using the token-protected diagnostics API:
-
-```bash
-# Query sanitized system telemetry
-TOKEN=$(cat data/resillo.token)
-curl -s http://127.0.0.1:8000/api/diagnostics -H "X-Resillo-Token: $TOKEN" | jq .
-```
-
-#### Sanitized Telemetry Schema
-```json
-{
-  "status": "healthy",
-  "uptime_seconds": 86400.0,
-  "queue_depth": 0,
-  "circuit_breaker": {
-    "state": "closed",
-    "trips": 0,
-    "current_failures": 0,
-    "total_failures": 2,
-    "total_successes": 412,
-    "cooldown_remaining_seconds": 0.0
-  },
-  "conflicts": {
-    "detected_in_session": 3,
-    "total_notes": 85,
-    "total_events": 92,
-    "divergent_events": 7
-  },
-  "storage": {
-    "db_online": true,
-    "is_writable": true,
-    "database_path": "data/resillo.sqlite3",
-    "database_size_bytes": 147456
-  },
-  "recent_errors": []
-}
-```
-
-> [!NOTE]
-> **Data Privacy Guarantee**: `/api/diagnostics` exports sanitized error codes and technical summaries only. Note text, casualties, locations, and operator identifiers are stripped by regex sanitizers before export.
-
-#### Bounded Storage Log Rotation
-Log storage is strictly bounded to prevent disk exhaustion on resource-constrained field hardware:
-- **Max File Size:** `1 MB` (`RESILIO_LOG_MAX_BYTES=1048576`)
-- **Max Rotated Files:** `5` backups (`RESILIO_LOG_BACKUP_COUNT=5`)
-- **Storage Cap:** Bounded to **~5 MB total log footprint** over the entire 7-day deployment. Logs rotate automatically into `data/logs/resillo.log.1` ... `.5`.
-
-#### Daily 5-Minute Dogfood Audit
-Run this exact audit once at the start of every field day. It authenticates to the protected diagnostics endpoint, checks SQLite integrity, verifies the rotating-log cap, and waits for the backend triage queue to drain:
+With the API running:
 
 ```bash
 python scripts/dogfood_check.py
 ```
 
-PowerShell equivalent:
+PowerShell:
 
 ```powershell
 python .\scripts\dogfood_check.py
 ```
 
-The command must finish with `PASS dogfood_check: all checks passed` and exit code `0`. It is intentionally strict: stop the trial and reset the 7-day clock immediately for any `FAIL`, HTTP/API authentication error, database integrity error, queue that does not drain within 30 seconds, log-cap violation, missing note, duplicate note, orphaned process, or UI freeze.
-
-#### Reboot and Force-Stop Recovery Check
-At least once before Day 1 and after every device or app restart:
-
-1. Record the current audit result:
-   ```bash
-   python scripts/dogfood_check.py
-   ```
-2. Force-stop the desktop window or Android package, then launch ResillO again. On Android:
-   ```bash
-   adb shell am force-stop com.resillo.triage
-   adb shell monkey -p com.resillo.triage 1
-   ```
-3. Run the audit again:
-   ```bash
-   python scripts/dogfood_check.py
-   ```
-4. Confirm the previously captured IndexedDB outbox notes are visible exactly once and that the diagnostics `queue_depth` returns to `0`.
-
-The browser/Capacitor IndexedDB outbox is durable across force-stop/reboot and flushes on the next successful launch. SQLite stores pending triage notes durably; the backend re-enqueues every `pending` note during startup, so pending jobs resume without user intervention. Any missing, duplicated, or permanently pending item is a hard failure.
-
-#### Seven-Day Daily Record
-Copy one line per day into the field log:
+The audit checks protected diagnostics, database integrity, bounded rotating logs, and queue drain. It exits `0` only when it prints:
 
 ```text
-Day __ / Date __________ / dogfood_check exit=__ / queue drain=__s / notes reconciled=YES|NO / orphaned processes=0|NO / UI freeze=NO|YES / operator=________
+PASS dogfood_check: all checks passed
 ```
 
-Do not continue the trial after a hard failure. Preserve the diagnostics output and reset Day 1 only after the cause is corrected and the recovery check passes twice.
+Useful options include `--url`, `--token`, `--timeout`, `--drain-timeout`, and `--poll-interval`.
 
----
+### Failure behavior
 
-### 3. Storage & Disaster Recovery Runbook
+- **Ollama unavailable or slow:** after three failures, the circuit opens and fallback classification continues locally.
+- **Process restart:** pending notes are loaded into the worker queue during startup.
+- **Database full/read-only/locked:** the API returns a structured recoverable storage error (`507` for disk full; `503` for other storage failures). The browser outbox keeps unsent reports.
+- **Connectivity loss:** reports remain in IndexedDB and are retried on the next successful sync.
+- **Abrupt power loss:** restart the service; SQLite replays WAL frames during recovery.
 
-#### Scenario A: Abrupt Power Loss / Hard Crash
-- **Behavior:** SQLite WAL mode with `PRAGMA synchronous = FULL` commits every transaction directly to disk.
-- **Recovery:** Simply restart the service:
-  ```bash
-  python -m uvicorn main:app --host 127.0.0.1 --port 8000
-  ```
-  SQLite will automatically replay uncheckpointed WAL frames on startup with zero database corruption.
+Do not delete `data/resillo.sqlite3`, its WAL/SHM files, or `data/resillo.token` while the service is running. Preserve diagnostics and logs when investigating a failed field trial.
 
-#### Scenario B: Disk-Full Storage Error (`507 Insufficient Storage`)
-- **Symptom:** API returns HTTP `507` with `{"error": "storage_failure", "code": "DISK_FULL", "recoverable": true}`.
-- **Client Outbox Durability:** Client browser and mobile apps detect the 507 status and immediately halt queue draining, safely preserving un-synced notes in local IndexedDB without data loss.
-- **Remediation:**
-  1. Free temporary disk space or purge expired diagnostic archives:
-     ```bash
-     rm -rf /tmp/* data/logs/*.log.*
-     ```
-  2. Verify write readiness:
-     ```bash
-     curl -s http://127.0.0.1:8000/api/diagnostics -H "X-Resillo-Token: $TOKEN" | grep '"is_writable":true'
-     ```
-  3. Client outboxes will automatically flush pending triage reports on the next 5-second sync cadence.
-
-#### Scenario C: Read-Only Filesystem / Lockup (`503 Service Unavailable`)
-- **Symptom:** API returns HTTP `503` with `{"error": "storage_failure", "code": "DATABASE_READONLY", "recoverable": true}`.
-- **Client Outbox Durability:** Client outboxes preserve all field reports in IndexedDB storage.
-- **Remediation:**
-  1. Check filesystem mount permissions:
-     ```bash
-     mount -o remount,rw /data
-     chmod 664 data/resillo.sqlite3*
-     ```
-  2. Once writable, the backend resumes accepting writes and client outboxes drain automatically.
-
-#### Scenario D: Token Loss / Desynchronization
-- If the client loses the authorization token:
-  1. Read the persisted local token directly:
-     ```bash
-     cat data/resillo.token
-     ```
-  2. Paste into the client settings dialog via **API SERVER** button in the top navigation bar.
-
----
-
-### 4. Deterministic Native Build Commands
-
-Run deterministic build and asset synchronization scripts:
+## Build and verification commands
 
 ```bash
-# Sync web assets to mobile directory and run Capacitor Android sync
+# Copy the dashboard into www/ and synchronize Android
 npm run build:mobile
 
-# Deterministic Electron desktop launch
+# Prepare assets and launch Electron
 npm run build:desktop
 
-# Complete full asset & native bundle verification
+# Run the complete asset/native build sequence
 npm run build
-```
 
----
-
-## 📂 Repository Structure
-
-```
-ResillO/
-├── backend/                  # Core Python FastAPI backend
-│   ├── api.py                # REST endpoints and authentication routes
-│   ├── config.py             # Configuration defaults & token management
-│   ├── db.py                 # SQLite WAL connection & schema setup
-│   ├── sync_engine.py        # Event append log, SHA-256 idempotency & merge logic
-│   ├── triage_engine.py      # Ollama client, CircuitBreaker & fallback rule engine
-│   └── triage_worker.py      # Async background queue triage worker
-├── desktop/                  # Electron desktop container
-│   ├── main.cjs              # Electron main process & backend supervisor
-│   └── preload.cjs           # Secure bridge & inter-process communication
-├── android/                  # Capacitor Android native wrapper
-├── tests/                    # Test suites
-│   └── test_backend.py       # Triage, circuit breaker & idempotency tests
-├── main.py                   # Server entrypoint & FastAPI lifespan hooks
-├── index.html                # Responsive Tailwind CSS field dashboard
-├── capacitor.config.ts       # Capacitor native bridge configuration
-├── package.json              # Scripts for desktop & mobile toolchains
-└── requirements.txt          # Python dependencies
-```
-
----
-
-## 🧪 Testing & Verification
-
-Run the test suite to verify circuit breaker failover, idempotency, and conflict resolution:
-
-```bash
+# Python unit and chaos tests
 pytest -v
 ```
+
+For an end-to-end check against a running server:
+
+```bash
+python test_pipeline.py
+```
+
+## Repository layout
+
+```text
+ResillO/
+├── backend/
+│   ├── api.py              # REST routes, auth, storage errors
+│   ├── config.py           # Environment-backed settings and token
+│   ├── db.py               # SQLite schema and durable connection
+│   ├── diagnostics.py      # Sanitized telemetry and rotating logs
+│   ├── sync_engine.py      # Event log, idempotency, conflict merging
+│   ├── triage_engine.py    # Ollama client, breaker, fallback parser
+│   └── triage_worker.py    # Async background triage queue
+├── desktop/main.cjs        # Electron supervisor and dashboard shell
+├── android/                 # Capacitor Android project
+├── scripts/                 # Cold-start, dogfood, and asset tooling
+├── tests/                   # Unit, integration, and chaos tests
+├── data/                    # Runtime database, token, and logs
+├── index.html               # Source web dashboard
+├── www/                     # Capacitor web assets
+├── main.py                  # FastAPI application entrypoint
+├── capacitor.config.ts     # Capacitor configuration
+├── package.json             # Native client scripts
+└── requirements.txt         # Python dependencies
+```
+
+## Contributing
+
+1. Create a focused branch.
+2. Keep changes compatible with offline operation and local persistence.
+3. Add or update focused tests for behavior changes.
+4. Run `pytest -v` and the relevant build or verification command.
+5. Do not commit runtime databases, tokens, logs, or crash dumps.
 
 ---
 
 <p align="center">
-  Built for resilient crisis communications & emergency response 🕊️
+  Built for resilient crisis communications and emergency response.
 </p>
